@@ -100,6 +100,7 @@ export const Character = ({
         textures={spriteSheet.animations[direction]}
         animationSpeed={speed}
         anchor={{ x: 0.5, y: 0.5 }}
+        scale={{ x: 3, y: 3 }}
       />
       {emoji && (
         <Text x={0} y={-24} scale={{ x: -0.8, y: 0.8 }} text={emoji} anchor={{ x: 0.5, y: 0.5 }} />
