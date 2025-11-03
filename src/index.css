@@ -108,14 +108,14 @@ body {
 }
 
 .box {
-  border-width: 12px;
+  border-width: 6px;
   border-image-source: url(../assets/ui/box.svg);
   border-image-repeat: stretch;
   border-image-slice: 12.5%;
 }
 
 .desc {
-  border-width: 56px;
+  border-width: 24px;
   border-image-source: url(../assets/ui/desc.svg);
   border-image-repeat: stretch;
   border-image-slice: 28%;
@@ -182,4 +182,19 @@ p[contenteditable='true']:empty::before {
 
 .shape-top-left-corner {
   clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.6s ease-out;
 }
