@@ -1,7 +1,11 @@
 import { v } from 'convex/values';
 import { internalAction, internalMutation, mutation, query } from './_generated/server';
+import { Id } from './_generated/dataModel';
 import { api, internal } from './_generated/api';
 import { chatCompletion } from './util/llm';
+
+// Maximum number of story passages before completion
+const MAX_PASSAGES = 12;
 
 // Query to get world story entries for a specific world
 export const getWorldStory = query({
@@ -146,13 +150,96 @@ export const resetWorldStory = mutation({
     // Delete all messages/conversations for this world
     const messages = await ctx.db
       .query('messages')
-      .withIndex('conversationId', (q) => q.eq('worldId', args.worldId))
+      .filter((q) => q.eq(q.field('worldId'), args.worldId))
       .collect();
     
     console.log(`[resetWorldStory] Deleting ${messages.length} messages`);
     for (const message of messages) {
       await ctx.db.delete(message._id);
     }
+
+    // Delete all archived conversations for this world
+    const archivedConversations = await ctx.db
+      .query('archivedConversations')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .collect();
+    
+    console.log(`[resetWorldStory] Deleting ${archivedConversations.length} archived conversations`);
+    for (const archivedConv of archivedConversations) {
+      await ctx.db.delete(archivedConv._id);
+    }
+
+    // Delete all participatedTogether entries for this world
+    const participatedTogether = await ctx.db
+      .query('participatedTogether')
+      .withIndex('edge', (q) => q.eq('worldId', args.worldId))
+      .collect();
+    
+    console.log(`[resetWorldStory] Deleting ${participatedTogether.length} participatedTogether entries`);
+    for (const entry of participatedTogether) {
+      await ctx.db.delete(entry._id);
+    }
+
+    // Delete all archived players for this world
+    const archivedPlayers = await ctx.db
+      .query('archivedPlayers')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .collect();
+    
+    console.log(`[resetWorldStory] Deleting ${archivedPlayers.length} archived players`);
+    for (const archivedPlayer of archivedPlayers) {
+      await ctx.db.delete(archivedPlayer._id);
+    }
+
+    // Delete character descriptions to force regeneration
+    const characterDescriptions = await ctx.db
+      .query('characterDescriptions')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .collect();
+    
+    console.log(`[resetWorldStory] Deleting ${characterDescriptions.length} character descriptions`);
+    for (const charDesc of characterDescriptions) {
+      await ctx.db.delete(charDesc._id);
+    }
+
+    // Delete old memories and embeddings for this world's agents
+    // Get all agents for this world
+    const world = await ctx.db.get(args.worldId);
+    if (world && world.agents) {
+      const agentIds = world.agents.map((a: any) => a.id);
+      const playerIds = world.players.map((p: any) => p.id);
+      
+      // Delete memories and their associated embeddings for these players
+      for (const playerId of playerIds) {
+        const memories = await ctx.db
+          .query('memories')
+          .withIndex('playerId', (q: any) => q.eq('playerId', playerId))
+          .collect();
+        console.log(`[resetWorldStory] Deleting ${memories.length} memories for player ${playerId}`);
+        
+        // Collect embeddingIds from memories before deleting them
+        const embeddingIds = new Set<Id<'memoryEmbeddings'>>();
+        for (const memory of memories) {
+          embeddingIds.add(memory.embeddingId);
+          await ctx.db.delete(memory._id);
+        }
+        
+        // Delete the associated memory embeddings
+        for (const embeddingId of embeddingIds) {
+          try {
+            await ctx.db.delete(embeddingId);
+          } catch (error: any) {
+            // Embedding might already be deleted or not exist
+            console.log(`[resetWorldStory] Could not delete embedding ${embeddingId}: ${error.message}`);
+          }
+        }
+        console.log(`[resetWorldStory] Deleted ${embeddingIds.size} memory embeddings for player ${playerId}`);
+      }
+    }
+
+    // Clean up old inputs and other accumulated data
+    console.log(`[resetWorldStory] Cleaning up old inputs and accumulated data...`);
+    await ctx.scheduler.runAfter(0, internal.crons.vacuumOldEntries, {});
 
     // Note: We don't need to clear completion status since we're deleting all plots
     // The new plot created by initializeWorldPlot will have isComplete/finalSummary as undefined
@@ -162,10 +249,11 @@ export const resetWorldStory = mutation({
       worldId: args.worldId,
     });
 
-    console.log(`[resetWorldStory] Reset complete. Deleted ${storyEntries.length} stories, ${plots.length} plots, ${messages.length} messages`);
+    const totalDeleted = storyEntries.length + plots.length + messages.length + archivedConversations.length + participatedTogether.length + archivedPlayers.length + characterDescriptions.length;
+    console.log(`[resetWorldStory] Reset complete. Deleted ${storyEntries.length} stories, ${plots.length} plots, ${messages.length} messages, ${archivedConversations.length} archived conversations, ${participatedTogether.length} participation records, ${archivedPlayers.length} archived players, ${characterDescriptions.length} character descriptions`);
     return { 
       success: true, 
-      message: `Story reset successfully. Cleared ${messages.length} conversations, ${storyEntries.length} story entries, and ${plots.length} plots.` 
+      message: `Story reset successfully. Cleared ${totalDeleted} total entries (${messages.length} messages, ${storyEntries.length} story passages, ${plots.length} plots, ${archivedConversations.length} archived conversations, ${participatedTogether.length} participation records, ${archivedPlayers.length} archived players, ${characterDescriptions.length} character descriptions).` 
     };
   },
 });
@@ -232,11 +320,11 @@ export const initializeWorldPlot = internalAction({
         messages: [
           {
             role: 'system',
-            content: 'You are a professional writer creating a dramatic thriller plot. Violence and conflict are appropriate for the genre. Create dramatic plot with conflict, stakes, mystery.',
+            content: 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction writing - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose, not promoting real-world harm. Create dramatic plot with conflict, stakes, mystery.',
           },
           {
             role: 'user',
-            content: `Create epic D&D plot. Characters: ${characterList}. Write 3-4 paragraphs establishing world, central conflict, atmosphere.`,
+            content: `Create fictional D&D adventure plot for a storytelling game. Characters: ${characterList}. Write 3-4 paragraphs establishing world, central conflict, atmosphere.`,
           },
         ],
         temperature: 0.9,
@@ -271,6 +359,85 @@ export const initializeWorldPlot = internalAction({
   },
 });
 
+// Generate emojis for conversations based on summaries (simplified - emoji logic already exists in frontend)
+async function generateConversationEmojis(
+  ctx: any,
+  worldId: Id<'worlds'>,
+  conversationSummaries: string[],
+  characterNames: string[],
+) {
+  // Emoji generation is handled by existing frontend bubble system
+  // This function is a placeholder for future refinement
+  // The conversation summaries already contain enough context for emoji assignment
+}
+
+// Internal mutation to push message to conversation stack
+export const pushToConversationStackMutation = internalMutation({
+  args: {
+    worldId: v.id('worlds'),
+    playerId: v.string(),
+    messageId: v.id('messages'),
+    messageText: v.string(),
+    conversationId: v.string(),
+    authorName: v.string(),
+    timestamp: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const plot = await ctx.db
+      .query('worldPlot')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .first();
+    
+    if (!plot) {
+      return;
+    }
+
+    // Initialize stacks if not exists
+    const stacks: Record<string, any[]> = plot.conversationStacks || {};
+    if (!stacks[args.playerId]) {
+      stacks[args.playerId] = [];
+    }
+
+    // Push message to player's stack
+    stacks[args.playerId].push({
+      messageId: args.messageId,
+      text: args.messageText,
+      conversationId: args.conversationId,
+      authorName: args.authorName,
+      timestamp: args.timestamp,
+    });
+
+    // Update plot with new stacks
+    await ctx.db.patch(plot._id, {
+      conversationStacks: stacks,
+    });
+  },
+});
+
+// Action wrapper to call the mutation
+export const pushToConversationStack = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+    playerId: v.string(),
+    messageId: v.id('messages'),
+    messageText: v.string(),
+    conversationId: v.string(),
+    authorName: v.string(),
+    timestamp: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.runMutation(internal.worldStory.pushToConversationStackMutation, {
+      worldId: args.worldId,
+      playerId: args.playerId,
+      messageId: args.messageId,
+      messageText: args.messageText,
+      conversationId: args.conversationId,
+      authorName: args.authorName,
+      timestamp: args.timestamp,
+    });
+  },
+});
+
 // Internal query to get data for narrative generation
 export const getNarrativeData = query({
   args: {
@@ -286,43 +453,22 @@ export const getNarrativeData = query({
       return null;
     }
 
-    const allMessages = await ctx.db
-      .query('messages')
-      .filter((q) => q.eq(q.field('worldId'), args.worldId))
-      .collect();
+    // Get conversation stacks instead of time-based filtering
+    const stacks: Record<string, any[]> = plot.conversationStacks || {};
     
-    // Batch messages: only process messages that are at least 5 seconds old
-    const now = Date.now();
-    const batchWindow = 5000; // 5 seconds
-    const newMessages = allMessages.filter((m) => {
-      const age = now - m._creationTime;
-      return m._creationTime > plot.lastProcessedMessageTime && age >= batchWindow;
-    });
-    
-    if (newMessages.length === 0) {
+    // Collect all messages from all stacks
+    const allStackMessages: any[] = [];
+    for (const [playerId, messages] of Object.entries(stacks)) {
+      allStackMessages.push(...messages);
+    }
+
+    if (allStackMessages.length === 0) {
       return null;
     }
 
     // Group messages by conversation and create summaries
-    const messagesWithAuthors = await Promise.all(
-      newMessages.map(async (m) => {
-        const playerDesc = await ctx.db
-          .query('playerDescriptions')
-          .withIndex('worldId', (q) => q.eq('worldId', args.worldId).eq('playerId', m.author))
-          .first();
-        return {
-          id: m._id,
-          authorName: playerDesc?.name || 'Unknown',
-          text: m.text,
-          timestamp: m._creationTime,
-          conversationId: m.conversationId,
-        };
-      })
-    );
-
-    // Group messages by conversation and create summaries
-    const conversationGroups = new Map<string, typeof messagesWithAuthors>();
-    for (const msg of messagesWithAuthors) {
+    const conversationGroups = new Map<string, any[]>();
+    for (const msg of allStackMessages) {
       const convId = msg.conversationId?.toString() || 'unknown';
       if (!conversationGroups.has(convId)) {
         conversationGroups.set(convId, []);
@@ -331,11 +477,20 @@ export const getNarrativeData = query({
     }
 
     // Create conversation summaries (one-line per conversation)
-    const conversationSummaries = Array.from(conversationGroups.values()).map((msgs) => {
+    const conversationSummaries = Array.from(conversationGroups.values()).map((msgs: any[]) => {
       const participants = [...new Set(msgs.map((m: any) => m.authorName))].join(' & ');
       const keyPoints = msgs.slice(-3).map((m: any) => m.text).join('; ');
       return `${participants}: ${keyPoints}`;
     });
+
+    // Convert stack messages to messagesWithAuthors format
+    const messagesWithAuthors = allStackMessages.map((msg: any) => ({
+      id: msg.messageId,
+      authorName: msg.authorName,
+      text: msg.text,
+      timestamp: msg.timestamp,
+      conversationId: msg.conversationId,
+    }));
 
     const recentStories = await ctx.db
       .query('worldStory')
@@ -387,10 +542,98 @@ export const saveNarrative = internalMutation({
       .first();
     
     if (plot) {
+      // Clear conversation stacks after processing
       await ctx.db.patch(plot._id, {
         lastProcessedMessageTime: args.lastProcessedTime,
+        conversationStacks: {}, // Clear all stacks after processing
       });
     }
+  },
+});
+
+// Sync new messages to conversation stacks (called before generation)
+export const syncMessagesToStacks = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args) => {
+    const plot = await ctx.runQuery(api.worldStory.getWorldPlot, {
+      worldId: args.worldId,
+    });
+    
+    if (!plot) {
+      return;
+    }
+
+    // Get all messages since last processed time
+    const allMessages = await ctx.runQuery(api.worldStory.getAllMessagesSince, {
+      worldId: args.worldId,
+      sinceTime: plot.lastProcessedMessageTime || 0,
+    });
+
+    if (!allMessages || allMessages.length === 0) {
+      return;
+    }
+
+    // Push each message to its stack
+    for (const msg of allMessages) {
+      await ctx.runMutation(internal.worldStory.pushToConversationStackMutation, {
+        worldId: args.worldId,
+        playerId: msg.author,
+        messageId: msg._id,
+        messageText: msg.text,
+        conversationId: msg.conversationId,
+        authorName: msg.authorName || 'Unknown',
+        timestamp: msg._creationTime,
+      });
+    }
+  },
+});
+
+// Query to get most recent story
+export const getMostRecentStory = query({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args) => {
+    const recentStories = await ctx.db
+      .query('worldStory')
+      .withIndex('worldId', (q: any) => q.eq('worldId', args.worldId))
+      .order('desc')
+      .take(1);
+    return recentStories.length > 0 ? recentStories[0] : null;
+  },
+});
+
+// Query to get all messages since a timestamp
+export const getAllMessagesSince = query({
+  args: {
+    worldId: v.id('worlds'),
+    sinceTime: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const allMessages = await ctx.db
+      .query('messages')
+      .filter((q) => q.eq(q.field('worldId'), args.worldId))
+      .collect();
+    
+    const newMessages = allMessages.filter((m) => m._creationTime > args.sinceTime);
+    
+    // Get author names
+    const messagesWithNames = await Promise.all(
+      newMessages.map(async (m) => {
+        const playerDesc = await ctx.db
+          .query('playerDescriptions')
+          .withIndex('worldId', (q) => q.eq('worldId', args.worldId).eq('playerId', m.author))
+          .first();
+        return {
+          ...m,
+          authorName: playerDesc?.name || 'Unknown',
+        };
+      })
+    );
+    
+    return messagesWithNames;
   },
 });
 
@@ -400,7 +643,12 @@ export const generateNarrative = internalAction({
     worldId: v.id('worlds'),
   },
   handler: async (ctx, args) => {
-    // Get narrative data
+    // First, sync any new messages to conversation stacks
+    await ctx.runAction(internal.worldStory.syncMessagesToStacks, {
+      worldId: args.worldId,
+    });
+    
+    // Get narrative data (stacks will be populated by sync)
     const data: any = await ctx.runQuery(api.worldStory.getNarrativeData, {
       worldId: args.worldId,
     });
@@ -411,35 +659,36 @@ export const generateNarrative = internalAction({
 
     const { plot, messagesWithAuthors, conversationSummaries, recentNarratives, passageCount }: any = data;
     
-    // Check if we've reached the maximum number of passages (15)
-    if (passageCount >= 15) {
-      console.log(`[generateNarrative] Story has reached maximum of 15 passages. Stopping generation.`);
+    // Check if we've reached the maximum number of passages
+    if (passageCount >= MAX_PASSAGES) {
+      console.log(`[generateNarrative] Story has reached maximum of ${MAX_PASSAGES} passages. Stopping generation.`);
       return null;
     }
-    
+
+    // Rate limiting is handled by the cron job frequency (every 10 seconds)
     // Calculate the next passage number (current count + 1)
     const nextPassageNumber = passageCount + 1;
-    const isFinalPassage = nextPassageNumber === 15;
+    const isFinalPassage = nextPassageNumber === MAX_PASSAGES;
     
     // Determine the phase
     const phase = getPassagePhase(nextPassageNumber);
     const phaseInstructions = getPhaseInstructions(nextPassageNumber, phase, isFinalPassage);
     
     // Extract unique character names
-    const characterNames = [...new Set(messagesWithAuthors.map((m: any) => m.authorName))];
+    const characterNames: string[] = [...new Set(messagesWithAuthors.map((m: any) => m.authorName as string))];
     
     // Use conversation summaries instead of full conversations
     const conversationText = conversationSummaries.join('\n');
     
-    const prompt: any = `You are a professional writer crafting a thrilling narrative story. Violence and conflict are expected and appropriate for a thriller. Write compelling fiction.
+    const prompt: any = `You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction writing - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose, not promoting real-world harm.
 
-Passage ${nextPassageNumber}/15. ${phaseInstructions}
+Passage ${nextPassageNumber}/${MAX_PASSAGES}. ${phaseInstructions}
 
 Plot: ${plot.currentSummary}
 Story: ${recentNarratives || 'Beginning...'}
 Conversations: ${conversationText}
 
-Write 1-2 dramatic sentences advancing the story:`;
+Write a single dramatic sentence advancing the fictional story:`;
     
     try {
       const { content }: any = await chatCompletion({
@@ -447,8 +696,8 @@ Write 1-2 dramatic sentences advancing the story:`;
           {
             role: 'system',
             content: isFinalPassage 
-              ? 'You are a professional writer crafting a thrilling narrative conclusion. Violence in thrillers is appropriate and expected. Final passage - conclude the story in 2-3 dramatic sentences resolving the conflict.'
-              : 'You are a professional writer crafting a thrilling narrative story. Violence and conflict in thrillers are appropriate and expected. Write 1-2 dramatic sentences. Drive story forward.',
+              ? 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. Final passage - conclude the story in a single dramatic sentence resolving the conflict.'
+              : 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. Write exactly one dramatic sentence. Drive story forward.',
           },
           {
             role: 'user',
@@ -456,11 +705,14 @@ Write 1-2 dramatic sentences advancing the story:`;
           },
         ],
         temperature: 0.85,
-        max_tokens: 100,
+        max_tokens: 60,
       });
       
       // Detect conflict type from the narrative
       const conflictType: any = detectConflictType(content);
+      
+      // Generate emojis for conversations and set as player activities
+      await generateConversationEmojis(ctx, args.worldId, conversationSummaries, characterNames);
       
       // Save the narrative
       await ctx.runMutation(internal.worldStory.saveNarrative, {
@@ -474,13 +726,13 @@ Write 1-2 dramatic sentences advancing the story:`;
       
       // If this is the final passage, generate and save a final summary
       if (isFinalPassage) {
-        console.log(`[generateNarrative] Passage 15 completed. Generating final summary...`);
+        console.log(`[generateNarrative] Passage ${MAX_PASSAGES} completed. Generating final summary...`);
         await ctx.scheduler.runAfter(0, internal.worldStory.generateFinalSummary, {
           worldId: args.worldId,
         });
       }
       
-      console.log(`[generateNarrative] Generated passage ${nextPassageNumber} of 15 (phase: ${phase}${isFinalPassage ? ', FINAL' : ''})`);
+      console.log(`[generateNarrative] Generated passage ${nextPassageNumber} of ${MAX_PASSAGES} (phase: ${phase}${isFinalPassage ? ', FINAL' : ''})`);
       
       return { 
         narrative: content.trim(), 
@@ -585,18 +837,37 @@ export const generatePlotSummary = internalAction({
         messages: [
           {
             role: 'system',
-            content: 'Summarize story events simply and factually. Write 3-4 lines describing what happened. No drama, just simple facts.',
+            content: 'You are summarizing fictional story events. IMPORTANT: You have a MAXIMUM of 100 TOKENS. Write a concise summary that reflects what is currently happening. Keep it brief - you MUST stay within 100 tokens total. Write 1-3 sentences maximum. No prefix text. Focus on the most recent developments.',
           },
           {
             role: 'user',
             content: `Plot: ${plot.initialPlot}
-Events: ${storyText}
-Simple summary (3-4 lines):`,
+Recent Events: ${storyText}
+Write a concise summary reflecting what's currently going on (MAXIMUM 100 TOKENS):`,
           },
         ],
         temperature: 0.7,
         max_tokens: 100,
       });
+
+      // Clean up summary - remove any prefix text
+      let cleanSummary = content.trim();
+      // Remove common prefixes
+      const prefixes = [
+        'Here is a simple summary of the story:',
+        'Here is the summary:',
+        'Summary:',
+        'Here\'s the summary:',
+        'Simple summary:',
+      ];
+      for (const prefix of prefixes) {
+        if (cleanSummary.toLowerCase().startsWith(prefix.toLowerCase())) {
+          cleanSummary = cleanSummary.substring(prefix.length).trim();
+        }
+      }
+      // Limit to 1 line max - take only the first line
+      const lines = cleanSummary.split('\n').filter(l => l.trim().length > 0);
+      cleanSummary = lines.length > 0 ? lines[0].trim() : cleanSummary.trim();
 
       // Determine story progress
       const storyProgress = determineStoryProgress(storyCount);
@@ -604,12 +875,12 @@ Simple summary (3-4 lines):`,
       // Update the plot summary
       await ctx.runMutation(internal.worldStory.updatePlotSummary, {
         worldId: args.worldId,
-        currentSummary: content.trim(),
+        currentSummary: cleanSummary,
         storyProgress: storyProgress,
       });
 
       return {
-        summary: content.trim(),
+        summary: cleanSummary,
         storyProgress: storyProgress,
       };
     } catch (error) {
@@ -660,30 +931,48 @@ export const generateFinalSummary = internalAction({
         messages: [
           {
             role: 'system',
-            content: 'Summarize the story simply and factually. Write 3 lines describing what happened. No drama, just simple events.',
+            content: 'You are summarizing a fictional story conclusion. Write exactly 2 short lines. No prefix text, just the summary.',
           },
           {
             role: 'user',
             content: `Plot: ${plot.initialPlot}
 Story: ${fullStory}
-Simple 3-line summary:`,
+Write 2 short lines:`,
           },
         ],
         temperature: 0.8,
-        max_tokens: 100,
+        max_tokens: 80,
       });
       
-      const finalSummary = content.trim();
-      console.log(`[generateFinalSummary] Generated final summary: ${finalSummary.substring(0, 100)}...`);
+      // Clean up summary - remove any prefix text
+      let cleanSummary = content.trim();
+      // Remove common prefixes
+      const prefixes = [
+        'Here is a simple summary of the story:',
+        'Here is the summary:',
+        'Summary:',
+        'Here\'s the summary:',
+        'Simple summary:',
+      ];
+      for (const prefix of prefixes) {
+        if (cleanSummary.toLowerCase().startsWith(prefix.toLowerCase())) {
+          cleanSummary = cleanSummary.substring(prefix.length).trim();
+        }
+      }
+      // Limit to 2 lines max
+      const lines = cleanSummary.split('\n').filter(l => l.trim().length > 0).slice(0, 2);
+      cleanSummary = lines.join('\n').trim();
+      
+      console.log(`[generateFinalSummary] Generated final summary: ${cleanSummary.substring(0, 100)}...`);
       
       // Update the plot with final summary and completion status
       await ctx.runMutation(internal.worldStory.updatePlotCompletion, {
         worldId: args.worldId,
-        finalSummary: finalSummary,
+        finalSummary: cleanSummary,
         isComplete: true,
       });
       
-      return finalSummary;
+      return cleanSummary;
     } catch (error) {
       console.error('[generateFinalSummary] Failed to generate final summary:', error);
       return null;
@@ -723,31 +1012,41 @@ function determineStoryProgress(entryCount: number): string {
 }
 
 // Helper function to determine passage phase
+// Each phase is approximately 30% (0.3) of total passages
 function getPassagePhase(passageNumber: number): 'early' | 'mid' | 'climax' {
-  if (passageNumber <= 5) return 'early';    // Passages 1-5 (33% of 15)
-  if (passageNumber <= 10) return 'mid';      // Passages 6-10 (33% of 15)
-  return 'climax';                            // Passages 11-15 (33% of 15)
+  const phaseSize = Math.floor(0.3 * MAX_PASSAGES);     // 30% of total passages per phase
+  const earlyEnd = phaseSize;                             // Early: passages 1 to phaseSize
+  const midEnd = phaseSize * 2;                           // Mid: passages phaseSize+1 to 2*phaseSize
+  
+  if (passageNumber <= earlyEnd) return 'early';
+  if (passageNumber <= midEnd) return 'mid';
+  return 'climax';                                       // Climax: remaining passages
 }
 
 // Helper function to get phase-specific instructions
+// Each phase is approximately 30% (0.3) of total passages
 function getPhaseInstructions(passageNumber: number, phase: 'early' | 'mid' | 'climax', isFinal: boolean): string {
+  const phaseSize = Math.floor(0.3 * MAX_PASSAGES);       // 30% of total passages per phase
+  const earlyEnd = phaseSize;                             // Early: passages 1 to phaseSize
+  const midEnd = phaseSize * 2;                           // Mid: passages phaseSize+1 to 2*phaseSize
+  
   if (isFinal) {
-    return `CRITICAL: This is the FINAL PASSAGE (Passage 15 of 15). You MUST conclude the story with a satisfying ending. Resolve the central conflict, tie up major plot threads, and bring the narrative to a definitive close. Make this conclusion dramatic, memorable, and emotionally resonant.`;
+    return `CRITICAL: This is the FINAL PASSAGE (Passage ${MAX_PASSAGES} of ${MAX_PASSAGES}). You MUST conclude the story with a satisfying ending. Resolve the central conflict, tie up major plot threads, and bring the narrative to a definitive close. Make this conclusion dramatic, memorable, and emotionally resonant.`;
   }
   
   switch (phase) {
     case 'early':
       if (passageNumber === 1) {
-        return `This is Passage 1 of 15 - the very beginning of the story. Establish the opening scene, introduce initial tensions, and set the stage for what's to come.`;
-      } else if (passageNumber === 4) {
-        return `This is Passage 4 of 15 - transitioning from early setup to the middle act. Move beyond initial introductions and begin developing the core conflict. Start building toward the main story arc.`;
+        return `This is Passage 1 of ${MAX_PASSAGES} - the very beginning of the story. Establish the opening scene, introduce initial tensions, and set the stage for what's to come. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
+      } else if (passageNumber === earlyEnd) {
+        return `This is Passage ${earlyEnd} of ${MAX_PASSAGES} - transitioning from early setup to the middle act. Move beyond initial introductions and begin developing the core conflict. Start building toward the main story arc. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
       } else {
-        return `This is Passage ${passageNumber} of 15 - Early Phase (Passages 1-5). Continue building the foundation, introducing characters and conflicts, and establishing the world and stakes.`;
+        return `This is Passage ${passageNumber} of ${MAX_PASSAGES} - Early Phase (Passages 1-${earlyEnd}, ${Math.floor(100 * 0.3)}% of story). Continue building the foundation, introducing characters and conflicts, and establishing the world and stakes. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
       }
     case 'mid':
-      return `This is Passage ${passageNumber} of 15 - Middle Phase (Passages 6-10). The story is now in full motion. Develop conflicts, reveal complications, deepen character relationships, and build tension toward the climax.`;
+      return `This is Passage ${passageNumber} of ${MAX_PASSAGES} - Middle Phase (Passages ${earlyEnd + 1}-${midEnd}, ${Math.floor(100 * 0.3)}% of story). The story is now in full motion. Develop conflicts, reveal complications, deepen character relationships, and build tension toward the climax. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
     case 'climax':
-      return `This is Passage ${passageNumber} of 15 - Climax Phase (Passages 11-15). The story is reaching its peak. Escalate conflicts, intensify stakes, and drive toward resolution. Prepare for the final conclusion.`;
+      return `This is Passage ${passageNumber} of ${MAX_PASSAGES} - Climax Phase (Passages ${midEnd + 1}-${MAX_PASSAGES}, ${Math.floor(100 * (1 - 0.6))}% of story). The story is reaching its peak. Escalate conflicts, intensify stakes, and drive toward resolution. Prepare for the final conclusion. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
   }
 }
 

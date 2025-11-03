@@ -18,24 +18,26 @@ crons.interval('restart dead worlds', { seconds: 60 }, internal.world.restartDea
 // Initialize plots for new worlds
 crons.interval('initialize world plots', { seconds: 15 }, internal.crons.initializeWorldPlots);
 
-// Generate real-time story narratives every 5 seconds
-crons.interval('generate world story', { seconds: 5 }, internal.crons.generateWorldStories);
+// Generate real-time story narratives every 10 seconds
+crons.interval('generate world story', { seconds: 10 }, internal.crons.generateWorldStories);
 
-// Generate plot summaries every 10 seconds for context
+// Generate plot summaries every 10 seconds for context (updates frequently to reflect what's going on)
 crons.interval('generate plot summaries', { seconds: 10 }, internal.crons.generatePlotSummaries);
 
-crons.daily('vacuum old entries', { hourUTC: 4, minuteUTC: 20 }, internal.crons.vacuumOldEntries);
+// Vacuum old entries every 6 hours to prevent database from growing too large
+crons.interval('vacuum old entries', { hours: 6 }, internal.crons.vacuumOldEntries);
 
 export default crons;
 
 const TablesToVacuum: TableNames[] = [
-  // Un-comment this to also clean out old conversations.
-  // 'conversationMembers', 'conversations', 'messages',
-
-  // Inputs aren't useful unless you're trying to replay history.
-  // If you want to support that, you should add a snapshot table, so you can
-  // replay from a certain time period. Or stop vacuuming inputs and replay from
-  // the beginning of time
+  // Vacuum old messages and conversations to prevent database bloat
+  'messages',
+  'archivedConversations',
+  
+  // Vacuum old story entries (keep only recent ones)
+  'worldStory',
+  
+  // Inputs aren't useful unless you're trying to replay history
   'inputs',
 
   // We can keep memories without their embeddings for inspection, but we won't
@@ -109,18 +111,23 @@ export const vacuumOldEntries = internalMutation({
     const before = Date.now() - VACUUM_MAX_AGE;
     for (const tableName of TablesToVacuum) {
       console.log(`Checking ${tableName}...`);
-      const exists = await ctx.db
-        .query(tableName)
-        .withIndex('by_creation_time', (q) => q.lt('_creationTime', before))
-        .first();
-      if (exists) {
-        console.log(`Vacuuming ${tableName}...`);
-        await ctx.scheduler.runAfter(0, internal.crons.vacuumTable, {
-          tableName,
-          before,
-          cursor: null,
-          soFar: 0,
-        });
+      try {
+        // Use filter instead of index since most tables don't have by_creation_time index
+        const exists = await ctx.db
+          .query(tableName)
+          .filter((q: any) => q.lt(q.field('_creationTime'), before))
+          .first();
+        if (exists) {
+          console.log(`Vacuuming ${tableName}...`);
+          await ctx.scheduler.runAfter(0, internal.crons.vacuumTable, {
+            tableName,
+            before,
+            cursor: null,
+            soFar: 0,
+          });
+        }
+      } catch (error: any) {
+        console.log(`Skipping ${tableName} - ${error.message || 'error'}`);
       }
     }
   },
@@ -134,14 +141,31 @@ export const vacuumTable = internalMutation({
     soFar: v.number(),
   },
   handler: async (ctx, { tableName, before, cursor, soFar }) => {
-    const results = await ctx.db
-      .query(tableName as TableNames)
-      .withIndex('by_creation_time', (q) => q.lt('_creationTime', before))
-      .paginate({ cursor, numItems: DELETE_BATCH_SIZE });
+    // Try to use index if available, otherwise use filter
+    let results;
+    try {
+      results = await ctx.db
+        .query(tableName as TableNames)
+        .withIndex('by_creation_time', (q: any) => q.lt('_creationTime', before))
+        .paginate({ cursor, numItems: DELETE_BATCH_SIZE });
+    } catch (error: any) {
+      // Fallback to filter if index doesn't exist
+      const allOld = await ctx.db
+        .query(tableName as TableNames)
+        .filter((q: any) => q.lt(q.field('_creationTime'), before))
+        .take(DELETE_BATCH_SIZE);
+      
+      results = {
+        page: allOld,
+        continueCursor: allOld.length === DELETE_BATCH_SIZE ? 'continue' : null,
+        isDone: allOld.length < DELETE_BATCH_SIZE,
+      };
+    }
+    
     for (const row of results.page) {
       await ctx.db.delete(row._id);
     }
-    if (!results.isDone) {
+    if (!results.isDone && results.continueCursor) {
       await ctx.scheduler.runAfter(0, internal.crons.vacuumTable, {
         tableName,
         before,
