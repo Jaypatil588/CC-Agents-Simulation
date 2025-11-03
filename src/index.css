@@ -126,6 +126,9 @@ body {
   border-image-source: url(../assets/ui/chats.svg);
   border-image-repeat: stretch;
   border-image-slice: 40%;
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .login-prompt {
