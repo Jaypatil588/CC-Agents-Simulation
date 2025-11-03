@@ -316,6 +316,17 @@ export const agentSendMessage = internalMutation({
     operationId: v.string(),
   },
   handler: async (ctx, args) => {
+    // Get player name for terminal logging
+    const playerDescription = await ctx.db
+      .query('playerDescriptions')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId).eq('playerId', args.playerId))
+      .first();
+    
+    const playerName = playerDescription?.name || args.playerId;
+    
+    // Log to terminal
+    console.log(`[${new Date().toLocaleTimeString()}] 💬 ${playerName}: ${args.text}`);
+    
     await ctx.db.insert('messages', {
       conversationId: args.conversationId,
       author: args.playerId,
