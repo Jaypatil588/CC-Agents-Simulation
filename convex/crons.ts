@@ -15,6 +15,15 @@ crons.interval(
 
 crons.interval('restart dead worlds', { seconds: 60 }, internal.world.restartDeadWorlds);
 
+// Initialize plots for new worlds
+crons.interval('initialize world plots', { seconds: 15 }, internal.crons.initializeWorldPlots);
+
+// Generate real-time story narratives every 5 seconds
+crons.interval('generate world story', { seconds: 5 }, internal.crons.generateWorldStories);
+
+// Generate plot summaries every 10 seconds for context
+crons.interval('generate plot summaries', { seconds: 10 }, internal.crons.generatePlotSummaries);
+
 crons.daily('vacuum old entries', { hourUTC: 4, minuteUTC: 20 }, internal.crons.vacuumOldEntries);
 
 export default crons;
@@ -36,6 +45,59 @@ const TablesToVacuum: TableNames[] = [
   // one that will cause issues over time is having >>100k vectors.
   'memoryEmbeddings',
 ];
+
+// Initialize plots for worlds that don't have them
+export const initializeWorldPlots = internalMutation({
+  args: {},
+  handler: async (ctx, args) => {
+    const worlds = await ctx.db.query('worlds').collect();
+    
+    for (const world of worlds) {
+      const existingPlot = await ctx.db
+        .query('worldPlot')
+        .withIndex('worldId', (q) => q.eq('worldId', world._id))
+        .first();
+      
+      if (!existingPlot) {
+        // Initialize plot for this world (run as action)
+        console.log(`Initializing plot for world ${world._id}`);
+        await ctx.scheduler.runAfter(0, internal.worldStory.initializeWorldPlot, {
+          worldId: world._id,
+        });
+      }
+    }
+  },
+});
+
+// Generate real-time story narratives
+export const generateWorldStories = internalMutation({
+  args: {},
+  handler: async (ctx, args) => {
+    const worlds = await ctx.db.query('worlds').collect();
+    
+    for (const world of worlds) {
+      // Schedule story generation for this world (run as action)
+      await ctx.scheduler.runAfter(0, internal.worldStory.generateNarrative, {
+        worldId: world._id,
+      });
+    }
+  },
+});
+
+// Generate plot summaries every 10 seconds
+export const generatePlotSummaries = internalMutation({
+  args: {},
+  handler: async (ctx, args) => {
+    const worlds = await ctx.db.query('worlds').collect();
+    
+    for (const world of worlds) {
+      // Schedule summary generation for this world (run as action)
+      await ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummary, {
+        worldId: world._id,
+      });
+    }
+  },
+});
 
 export const vacuumOldEntries = internalMutation({
   args: {},
