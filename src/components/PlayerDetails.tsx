@@ -4,6 +4,7 @@ import { Id } from '../../convex/_generated/dataModel';
 import closeImg from '../../assets/close.svg';
 import { SelectElement } from './Player';
 import { Messages } from './Messages';
+import { WorldStory } from './WorldStory';
 import { toastOnError } from '../toasts';
 import { useSendInput } from '../hooks/sendInput';
 import { Player } from '../../convex/aiTown/player';
@@ -54,11 +55,7 @@ export default function PlayerDetails({
   const leaveConversation = useSendInput(engineId, 'leaveConversation');
 
   if (!playerId) {
-    return (
-      <div className="h-full text-xl flex text-center items-center p-4">
-        Click on an agent on the map to see chat history.
-      </div>
-    );
+    return <WorldStory worldId={worldId} scrollViewRef={scrollViewRef} />;
   }
   if (!player) {
     return null;
