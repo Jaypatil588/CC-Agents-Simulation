@@ -1,5 +1,5 @@
 import { v } from 'convex/values';
-import { internalAction } from '../_generated/server';
+import { internalAction, internalMutation, internalQuery } from '../_generated/server';
 import { WorldMap, serializedWorldMap } from './worldMap';
 import { rememberConversation } from '../agent/memory';
 import { GameId, agentId, conversationId, playerId } from './ids';
@@ -10,7 +10,13 @@ import {
 } from '../agent/conversation';
 import { assertNever } from '../util/assertNever';
 import { serializedAgent } from './agent';
-import { ACTIVITIES, ACTIVITY_COOLDOWN, CONVERSATION_COOLDOWN } from '../constants';
+import {
+  ACTIVITIES,
+  ACTIVITY_COOLDOWN,
+  CONVERSATION_COOLDOWN,
+  PRIORITY_CONVERSATION,
+  CONVERSATION_BATCH_SIZE,
+} from '../constants';
 import { api, internal } from '../_generated/api';
 import { sleep } from '../util/sleep';
 import { serializedPlayer } from './player';
@@ -63,37 +69,16 @@ export const agentGenerateMessage = internalAction({
     messageUuid: v.string(),
   },
   handler: async (ctx, args) => {
-    let completionFn;
-    switch (args.type) {
-      case 'start':
-        completionFn = startConversationMessage;
-        break;
-      case 'continue':
-        completionFn = continueConversationMessage;
-        break;
-      case 'leave':
-        completionFn = leaveConversationMessage;
-        break;
-      default:
-        assertNever(args.type);
-    }
-    const text = await completionFn(
-      ctx,
-      args.worldId,
-      args.conversationId as GameId<'conversations'>,
-      args.playerId as GameId<'players'>,
-      args.otherPlayerId as GameId<'players'>,
-    );
-
-    await ctx.runMutation(internal.aiTown.agent.agentSendMessage, {
+    // Queue the conversation request instead of processing immediately
+    await ctx.runMutation(internal.aiTown.agentOperations.queueConversationMessage, {
       worldId: args.worldId,
-      conversationId: args.conversationId,
-      agentId: args.agentId,
       playerId: args.playerId,
-      text,
-      messageUuid: args.messageUuid,
-      leaveConversation: args.type === 'leave',
+      agentId: args.agentId,
+      conversationId: args.conversationId,
+      otherPlayerId: args.otherPlayerId,
       operationId: args.operationId,
+      type: args.type,
+      messageUuid: args.messageUuid,
     });
   },
 });
@@ -184,3 +169,132 @@ function wanderDestination(worldMap: WorldMap) {
     y: 1 + Math.floor(Math.random() * (worldMap.height - 2)),
   };
 }
+
+// Queue a conversation message for batch processing
+export const queueConversationMessage = internalMutation({
+  args: {
+    worldId: v.id('worlds'),
+    playerId: v.string(),
+    agentId: v.string(),
+    conversationId: v.string(),
+    otherPlayerId: v.string(),
+    operationId: v.string(),
+    type: v.union(v.literal('start'), v.literal('continue'), v.literal('leave')),
+    messageUuid: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert('conversationQueue', {
+      worldId: args.worldId,
+      playerId: args.playerId,
+      agentId: args.agentId,
+      conversationId: args.conversationId,
+      otherPlayerId: args.otherPlayerId,
+      operationId: args.operationId,
+      type: args.type,
+      messageUuid: args.messageUuid,
+      queuedAt: Date.now(),
+      priority: PRIORITY_CONVERSATION,
+    });
+  },
+});
+
+// Process a batch of queued conversation messages
+export const processConversationBatch = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args) => {
+    // Get queued conversations for this world, ordered by priority and queued time
+    const queue = await ctx.runQuery(internal.aiTown.agentOperations.getQueuedConversations, {
+      worldId: args.worldId,
+      limit: CONVERSATION_BATCH_SIZE,
+    });
+
+    if (queue.length === 0) {
+      return;
+    }
+
+    console.log(`[processConversationBatch] Processing ${queue.length} conversations for world ${args.worldId}`);
+
+    // Process conversations sequentially to reduce concurrent LLM load
+    // This batches all conversations together instead of processing them immediately when requested
+    for (const item of queue) {
+      try {
+        let completionFn;
+        switch (item.type) {
+          case 'start':
+            completionFn = startConversationMessage;
+            break;
+          case 'continue':
+            completionFn = continueConversationMessage;
+            break;
+          case 'leave':
+            completionFn = leaveConversationMessage;
+            break;
+          default:
+            assertNever(item.type);
+        }
+
+        const text = await completionFn(
+          ctx,
+          item.worldId,
+          item.conversationId as GameId<'conversations'>,
+          item.playerId as GameId<'players'>,
+          item.otherPlayerId as GameId<'players'>,
+        );
+
+        // Send the message
+        await ctx.runMutation(internal.aiTown.agent.agentSendMessage, {
+          worldId: item.worldId,
+          conversationId: item.conversationId,
+          agentId: item.agentId,
+          playerId: item.playerId,
+          text,
+          messageUuid: item.messageUuid,
+          leaveConversation: item.type === 'leave',
+          operationId: item.operationId,
+        });
+
+        // Remove from queue
+        await ctx.runMutation(internal.aiTown.agentOperations.removeQueuedConversation, {
+          queueId: item._id,
+        });
+      } catch (error) {
+        console.error(`[processConversationBatch] Error processing conversation ${item.conversationId}:`, error);
+        // Remove from queue even on error to prevent infinite retries
+        await ctx.runMutation(internal.aiTown.agentOperations.removeQueuedConversation, {
+          queueId: item._id,
+        });
+      }
+    }
+
+    console.log(`[processConversationBatch] Completed processing ${queue.length} conversations`);
+  },
+});
+
+// Get queued conversations for processing
+export const getQueuedConversations = internalQuery({
+  args: {
+    worldId: v.id('worlds'),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const queue = await ctx.db
+      .query('conversationQueue')
+      .withIndex('worldId_priority', (q) => q.eq('worldId', args.worldId))
+      .order('asc') // Lower priority number = higher priority
+      .take(args.limit);
+
+    return queue;
+  },
+});
+
+// Remove a conversation from the queue after processing
+export const removeQueuedConversation = internalMutation({
+  args: {
+    queueId: v.id('conversationQueue'),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.delete(args.queueId);
+  },
+});

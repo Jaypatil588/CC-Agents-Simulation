@@ -76,3 +76,11 @@ export const ENGINE_ACTION_DURATION = 30000;
 export const MAX_PATHFINDS_PER_STEP = 16;
 
 export const DEFAULT_NAME = 'Me';
+
+// Conversation batching constants
+export const CONVERSATION_BATCH_INTERVAL = 1000; // Process batches every 1 second
+export const CONVERSATION_BATCH_SIZE = 50; // Max conversations per batch
+// Priority levels: Lower = higher priority
+export const PRIORITY_PASSAGE_GENERATION = 0;
+export const PRIORITY_SUMMARY_GENERATION = 1;
+export const PRIORITY_CONVERSATION = 100; // Conversations have lower priority

@@ -55,6 +55,21 @@ export default defineSchema({
   })
     .index('worldId', ['worldId']),
 
+  conversationQueue: defineTable({
+    worldId: v.id('worlds'),
+    playerId: v.string(),
+    agentId: v.string(),
+    conversationId: v.string(),
+    otherPlayerId: v.string(),
+    operationId: v.string(),
+    type: v.union(v.literal('start'), v.literal('continue'), v.literal('leave')),
+    messageUuid: v.string(),
+    queuedAt: v.number(),
+    priority: v.number(), // Lower number = higher priority
+  })
+    .index('worldId_priority', ['worldId', 'priority'])
+    .index('queuedAt', ['queuedAt']),
+
   ...agentTables,
   ...aiTownTables,
   ...engineTables,

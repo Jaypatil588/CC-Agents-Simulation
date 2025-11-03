@@ -24,6 +24,9 @@ crons.interval('generate world story', { seconds: 10 }, internal.crons.generateW
 // Generate plot summaries every 10 seconds for context (updates frequently to reflect what's going on)
 crons.interval('generate plot summaries', { seconds: 10 }, internal.crons.generatePlotSummaries);
 
+// Process conversation batches every 1 second (lower priority than passages/summaries)
+crons.interval('process conversation batches', { seconds: 1 }, internal.crons.processConversationBatches);
+
 // Vacuum old entries every 6 hours to prevent database from growing too large
 crons.interval('vacuum old entries', { hours: 6 }, internal.crons.vacuumOldEntries);
 
@@ -94,10 +97,27 @@ export const generatePlotSummaries = internalMutation({
   handler: async (ctx, args) => {
     const worlds = await ctx.db.query('worlds').collect();
     
-    // Parallelize summary generation for all worlds
+    // Parallelize summary generation for all worlds (high priority)
     await Promise.all(
       worlds.map((world) =>
         ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummary, {
+          worldId: world._id,
+        })
+      )
+    );
+  },
+});
+
+// Process conversation batches for all worlds every 1 second (lower priority)
+export const processConversationBatches = internalMutation({
+  args: {},
+  handler: async (ctx, args) => {
+    const worlds = await ctx.db.query('worlds').collect();
+    
+    // Process conversation batches for all worlds (lower priority - scheduled after passages/summaries)
+    await Promise.all(
+      worlds.map((world) =>
+        ctx.scheduler.runAfter(0, internal.aiTown.agentOperations.processConversationBatch, {
           worldId: world._id,
         })
       )
