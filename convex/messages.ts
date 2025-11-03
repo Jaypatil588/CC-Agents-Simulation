@@ -2,6 +2,7 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { insertInput } from './aiTown/insertInput';
 import { conversationId, playerId } from './aiTown/ids';
+import { internal } from './_generated/api';
 
 export const listMessages = query({
   args: {
@@ -48,13 +49,17 @@ export const writeMessage = mutation({
     // Log to terminal
     console.log(`[${new Date().toLocaleTimeString()}] 💬 ${playerName}: ${args.text}`);
     
-    await ctx.db.insert('messages', {
+    const messageDoc = await ctx.db.insert('messages', {
       conversationId: args.conversationId,
       author: args.playerId,
       messageUuid: args.messageUuid,
       text: args.text,
       worldId: args.worldId,
     });
+    
+    // Note: Cannot schedule from mutation context, but messages from human players
+    // will be picked up by the cron job that scans for unprocessed messages
+    
     await insertInput(ctx, args.worldId, 'finishSendingMessage', {
       conversationId: args.conversationId,
       playerId: args.playerId,

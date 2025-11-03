@@ -28,12 +28,17 @@ const init = mutation({
       worldStatus.engineId,
     );
     if (shouldCreate) {
-      const toCreate = args.numAgents !== undefined ? args.numAgents : Descriptions.length;
-      for (let i = 0; i < toCreate; i++) {
-        await insertInput(ctx, worldStatus.worldId, 'createAgent', {
-          descriptionIndex: i % Descriptions.length,
-        });
-      }
+      // First, generate character descriptions with traits and species
+      await ctx.scheduler.runAfter(0, internal.characterGeneration.generateCharacterDescriptions, {
+        worldId: worldStatus.worldId,
+      });
+      
+      // Then create 5 agents (wait a bit for generation to complete)
+      const NUM_AGENTS = 5;
+      await ctx.scheduler.runAfter(1000, internal.init.createAgentsAfterGeneration, {
+        worldId: worldStatus.worldId,
+        numAgents: args.numAgents !== undefined ? args.numAgents : NUM_AGENTS,
+      });
     }
   },
 });
@@ -111,3 +116,40 @@ async function shouldCreateAgents(
   }
   return true;
 }
+
+// Create agents after character generation completes
+export const createAgentsAfterGeneration = mutation({
+  args: {
+    worldId: v.id('worlds'),
+    numAgents: v.number(),
+  },
+  handler: async (ctx, args) => {
+    // Get generated character descriptions
+    const descriptions = await ctx.db
+      .query('characterDescriptions')
+      .withIndex('worldId', (q: any) => q.eq('worldId', args.worldId))
+      .collect();
+    
+    if (!descriptions || descriptions.length === 0) {
+      console.warn('[createAgentsAfterGeneration] No character descriptions found, waiting...');
+      // Retry after 2 seconds
+      await ctx.scheduler.runAfter(2000, internal.init.createAgentsAfterGeneration, args);
+      return;
+    }
+    
+    const sortedDescriptions = descriptions.sort((a: any, b: any) => a.characterIndex - b.characterIndex);
+    const toCreate = Math.min(args.numAgents, sortedDescriptions.length);
+    
+    for (let i = 0; i < toCreate; i++) {
+      const desc = sortedDescriptions[i];
+      const characterName = `f${desc.characterIndex + 1}`;
+      await insertInput(ctx, args.worldId, 'createAgent', {
+        name: desc.name,
+        character: characterName,
+        identity: desc.identity,
+        plan: desc.plan,
+        species: desc.species,
+      });
+    }
+  },
+});

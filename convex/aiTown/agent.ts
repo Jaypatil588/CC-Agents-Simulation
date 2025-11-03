@@ -327,13 +327,33 @@ export const agentSendMessage = internalMutation({
     // Log to terminal
     console.log(`[${new Date().toLocaleTimeString()}] 💬 ${playerName}: ${args.text}`);
     
-    await ctx.db.insert('messages', {
+    const messageDoc = await ctx.db.insert('messages', {
       conversationId: args.conversationId,
       author: args.playerId,
       text: args.text,
       messageUuid: args.messageUuid,
       worldId: args.worldId,
     });
+    
+    // Push message to conversation stack for story generation
+    // Note: Using runMutation directly since this is already an internalMutation
+    // We'll need to import and call the mutation directly
+    try {
+      // Schedule as action to call the mutation
+      await ctx.scheduler.runAfter(0, internal.worldStory.pushToConversationStack, {
+        worldId: args.worldId,
+        playerId: args.playerId,
+        messageId: messageDoc,
+        messageText: args.text,
+        conversationId: args.conversationId,
+        authorName: playerName,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error('[agentSendMessage] Failed to push to conversation stack:', error);
+      // Continue anyway - this is non-critical
+    }
+    
     await insertInput(ctx, args.worldId, 'agentFinishSendingMessage', {
       conversationId: args.conversationId,
       agentId: args.agentId,

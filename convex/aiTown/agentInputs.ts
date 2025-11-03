@@ -5,7 +5,6 @@ import { Conversation, conversationInputs } from './conversation';
 import { movePlayer } from './movement';
 import { inputHandler } from './inputHandler';
 import { point } from '../util/types';
-import { Descriptions } from '../../data/characters';
 import { AgentDescription } from './agentDescription';
 import { Agent } from './agent';
 
@@ -118,16 +117,19 @@ export const agentInputs = {
   }),
   createAgent: inputHandler({
     args: {
-      descriptionIndex: v.number(),
+      name: v.string(),
+      character: v.string(),
+      identity: v.string(),
+      plan: v.string(),
+      species: v.optional(v.string()),
     },
     handler: (game, now, args) => {
-      const description = Descriptions[args.descriptionIndex];
       const playerId = Player.join(
         game,
         now,
-        description.name,
-        description.character,
-        description.identity,
+        args.name,
+        args.character,
+        args.identity,
       );
       const agentId = game.allocId('agents');
       game.world.agents.set(
@@ -145,8 +147,8 @@ export const agentInputs = {
         agentId,
         new AgentDescription({
           agentId: agentId,
-          identity: description.identity,
-          plan: description.plan,
+          identity: args.identity,
+          plan: args.plan,
         }),
       );
       return { agentId };
