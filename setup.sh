@@ -14,11 +14,20 @@ NC='\033[0m' # No Color
 APP_URL="http://localhost:5173/ai-town"
 
 wait_for_docker() {
-    for i in {1..40}; do
+    local max_attempts=${1:-40}
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
         if docker ps > /dev/null 2>&1; then
-            return 0
+            # Double-check by running docker info
+            if docker info > /dev/null 2>&1; then
+                return 0
+            fi
+        fi
+        if [ $((attempt % 5)) -eq 0 ]; then
+            print_info "Still waiting for Docker... (attempt $attempt/$max_attempts)"
         fi
         sleep 2
+        attempt=$((attempt + 1))
     done
     return 1
 }
@@ -79,9 +88,17 @@ echo "4️⃣  Verifying Docker is ready..."
 print_info "Waiting for Docker daemon to stabilize..."
 sleep 2
 
-if ! wait_for_docker; then
-    print_error "Docker daemon is not available"
+# Check if Docker Desktop is running, start it if not
+if ! docker ps > /dev/null 2>&1; then
+    print_info "Docker Desktop not detected, attempting to start..."
+    open -a Docker 2>/dev/null || true
+    sleep 5
+fi
+
+if ! wait_for_docker 60; then
+    print_error "Docker daemon is not available after waiting"
     print_info "Please ensure Docker Desktop is running and try again"
+    print_info "You can start Docker Desktop manually and rerun this script"
     exit 1
 fi
 print_status "Docker is ready"

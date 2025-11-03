@@ -204,13 +204,18 @@ export class Game extends AbstractGame {
   }
 
   async saveStep(ctx: ActionCtx, engineUpdate: EngineUpdate): Promise<void> {
-    const diff = this.takeDiff();
-    await ctx.runMutation(internal.aiTown.game.saveWorld, {
-      engineId: this.engine._id,
-      engineUpdate,
-      worldId: this.worldId,
-      worldDiff: diff,
-    });
+    try {
+      const diff = this.takeDiff();
+      await ctx.runMutation(internal.aiTown.game.saveWorld, {
+        engineId: this.engine._id,
+        engineUpdate,
+        worldId: this.worldId,
+        worldDiff: diff,
+      });
+    } catch (error: any) {
+      console.error(`Error saving world step for world ${this.worldId}:`, error);
+      throw error;
+    }
   }
 
   takeDiff(): GameStateDiff {
@@ -353,7 +358,12 @@ export const loadWorld = internalQuery({
     generationNumber: v.number(),
   },
   handler: async (ctx, args) => {
-    return await Game.load(ctx.db, args.worldId, args.generationNumber);
+    try {
+      return await Game.load(ctx.db, args.worldId, args.generationNumber);
+    } catch (error: any) {
+      console.error(`Error loading world ${args.worldId}:`, error);
+      throw error;
+    }
   },
 });
 
@@ -365,7 +375,12 @@ export const saveWorld = internalMutation({
     worldDiff: gameStateDiff,
   },
   handler: async (ctx, args) => {
-    await applyEngineUpdate(ctx, args.engineId, args.engineUpdate);
-    await Game.saveDiff(ctx, args.worldId, args.worldDiff);
+    try {
+      await applyEngineUpdate(ctx, args.engineId, args.engineUpdate);
+      await Game.saveDiff(ctx, args.worldId, args.worldDiff);
+    } catch (error: any) {
+      console.error(`Error saving world ${args.worldId} (engine ${args.engineId}):`, error);
+      throw error;
+    }
   },
 });

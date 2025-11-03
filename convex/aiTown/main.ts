@@ -103,11 +103,19 @@ export const runStep = internalAction({
       let now = Date.now();
       const deadline = now + args.maxDuration;
       while (now < deadline) {
-        await game.runStep(ctx, now);
+        try {
+          await game.runStep(ctx, now);
+        } catch (stepError: any) {
+          console.error(`Error in game.runStep for world ${args.worldId}:`, stepError);
+          // Break on error - the generation number will be mismatched on next run,
+          // which will be handled by the error handler below
+          break;
+        }
         const sleepUntil = Math.min(now + game.stepDuration, deadline);
         await sleep(sleepUntil - now);
         now = Date.now();
       }
+      // Schedule next run - if there was an error, generation number mismatch will be caught
       await ctx.scheduler.runAfter(0, internal.aiTown.main.runStep, {
         worldId: args.worldId,
         generationNumber: game.engine.generationNumber,
@@ -124,6 +132,7 @@ export const runStep = internalAction({
           return;
         }
       }
+      console.error(`Fatal error in runStep for world ${args.worldId}:`, e);
       throw e;
     }
   },

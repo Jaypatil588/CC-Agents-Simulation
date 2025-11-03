@@ -75,16 +75,21 @@ export abstract class AbstractGame {
     }
 
     // Commit the step by moving time forward, consuming our inputs, and saving the game's state.
-    const expectedGenerationNumber = this.engine.generationNumber;
-    this.engine.currentTime = currentTs;
-    this.engine.lastStepTs = lastStepTs;
-    this.engine.generationNumber += 1;
-    this.engine.processedInputNumber = processedInputNumber;
-    const { _id, _creationTime, ...engine } = this.engine;
-    const engineUpdate = { engine, completedInputs, expectedGenerationNumber };
-    await this.saveStep(ctx, engineUpdate);
+    try {
+      const expectedGenerationNumber = this.engine.generationNumber;
+      this.engine.currentTime = currentTs;
+      this.engine.lastStepTs = lastStepTs;
+      this.engine.generationNumber += 1;
+      this.engine.processedInputNumber = processedInputNumber;
+      const { _id, _creationTime, ...engine } = this.engine;
+      const engineUpdate = { engine, completedInputs, expectedGenerationNumber };
+      await this.saveStep(ctx, engineUpdate);
 
-    console.debug(`Simulated from ${startTs} to ${currentTs} (${currentTs - startTs}ms)`);
+      console.debug(`Simulated from ${startTs} to ${currentTs} (${currentTs - startTs}ms)`);
+    } catch (error: any) {
+      console.error(`Error in runStep for engine ${this.engine._id}:`, error);
+      throw error;
+    }
   }
 }
 
