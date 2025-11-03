@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   frontend:
     build: .
@@ -14,6 +12,7 @@ services:
       - ai-town-network
   backend:
     image: ghcr.io/get-convex/convex-backend:latest
+    container_name: ai-town-backend-1
     ports:
       - '${PORT:-3210}:3210'
       - '${SITE_PROXY_PORT:-3211}:3211'
@@ -28,10 +27,15 @@ services:
       - CONVEX_SITE_ORIGIN=${URL_BASE:-http://127.0.0.1}:${SITE_PROXY_PORT:-3211}
       - DATABASE_URL=${DATABASE_URL:-}
       - OLLAMA_HOST=http://host.docker.internal:11434
-    healthcheck:
-      test: curl -f http://localhost:3210/version
-      interval: 5s
-      start_period: 5s
+    restart: unless-stopped
+    # Set memory limit to 6GB to prevent OOM kills during bootstrap
+    # Docker Desktop only has 7.65GB total, backend was using 5.6GB+ and getting killed
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 4G
     networks:
       - ai-town-network
 
@@ -43,7 +47,7 @@ services:
       - NEXT_PUBLIC_DEPLOYMENT_URL=http://127.0.0.1:${PORT:-3210}
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
 
 volumes:
   data:
