@@ -38,6 +38,8 @@ export default defineSchema({
     lastProcessedMessageTime: v.number(), // Track which messages we've processed
     storyProgress: v.string(), // Current state of the story (beginning, rising, climax, etc)
     lastSummaryTime: v.number(), // When we last generated a summary
+    finalSummary: v.optional(v.string()), // Final 3-line summary when story completes (passage 15)
+    isComplete: v.optional(v.boolean()), // Whether the story has reached passage 15
   })
     .index('worldId', ['worldId']),
 

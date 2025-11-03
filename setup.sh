@@ -190,9 +190,9 @@ echo ""
 
 # Step 10: Pull required models
 echo "🔟 Pulling required Ollama models..."
-print_info "Pulling llama3 (this may take a few minutes)..."
-ollama pull llama3 > /dev/null 2>&1
-print_status "llama3 model ready"
+print_info "Pulling llama3.2:1b (faster model, this may take a few minutes)..."
+ollama pull llama3.2:1b > /dev/null 2>&1
+print_status "llama3.2:1b model ready"
 
 print_info "Pulling mxbai-embed-large..."
 ollama pull mxbai-embed-large > /dev/null 2>&1

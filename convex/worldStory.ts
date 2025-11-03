@@ -154,6 +154,9 @@ export const resetWorldStory = mutation({
       await ctx.db.delete(message._id);
     }
 
+    // Note: We don't need to clear completion status since we're deleting all plots
+    // The new plot created by initializeWorldPlot will have isComplete/finalSummary as undefined
+
     // Reinitialize the plot
     await ctx.scheduler.runAfter(0, internal.worldStory.initializeWorldPlot, {
       worldId: args.worldId,
@@ -229,25 +232,15 @@ export const initializeWorldPlot = internalAction({
         messages: [
           {
             role: 'system',
-            content: 'You are a master dungeon master creating an epic D&D campaign setting. Generate dramatic, conflict-driven plots with high stakes, mysteries, and adventure.',
+            content: 'You are a professional writer creating a dramatic thriller plot. Violence and conflict are appropriate for the genre. Create dramatic plot with conflict, stakes, mystery.',
           },
           {
             role: 'user',
-            content: `Create an epic D&D adventure plot for a fantasy realm. This should be a dramatic, conflict-driven story with:
-- A central conflict or threat
-- High stakes and tension
-- Mysteries to uncover
-- Opportunities for adventure and heroism
-- Room for character interactions to matter
-
-The inhabitants of this realm are:
-${characterList}
-
-Write a 3-4 paragraph plot setup that establishes the world, the central conflict, and the atmosphere. Make it exciting and full of potential for adventure!`,
+            content: `Create epic D&D plot. Characters: ${characterList}. Write 3-4 paragraphs establishing world, central conflict, atmosphere.`,
           },
         ],
         temperature: 0.9,
-        max_tokens: 500,
+        max_tokens: 100,
       });
 
       console.log(`[initializeWorldPlot] LLM response received, saving plot...`);
@@ -298,14 +291,21 @@ export const getNarrativeData = query({
       .filter((q) => q.eq(q.field('worldId'), args.worldId))
       .collect();
     
-    const newMessages = allMessages.filter((m) => m._creationTime > plot.lastProcessedMessageTime);
+    // Batch messages: only process messages that are at least 5 seconds old
+    const now = Date.now();
+    const batchWindow = 5000; // 5 seconds
+    const newMessages = allMessages.filter((m) => {
+      const age = now - m._creationTime;
+      return m._creationTime > plot.lastProcessedMessageTime && age >= batchWindow;
+    });
     
     if (newMessages.length === 0) {
       return null;
     }
 
+    // Group messages by conversation and create summaries
     const messagesWithAuthors = await Promise.all(
-      newMessages.slice(-5).map(async (m) => {
+      newMessages.map(async (m) => {
         const playerDesc = await ctx.db
           .query('playerDescriptions')
           .withIndex('worldId', (q) => q.eq('worldId', args.worldId).eq('playerId', m.author))
@@ -315,9 +315,27 @@ export const getNarrativeData = query({
           authorName: playerDesc?.name || 'Unknown',
           text: m.text,
           timestamp: m._creationTime,
+          conversationId: m.conversationId,
         };
       })
     );
+
+    // Group messages by conversation and create summaries
+    const conversationGroups = new Map<string, typeof messagesWithAuthors>();
+    for (const msg of messagesWithAuthors) {
+      const convId = msg.conversationId?.toString() || 'unknown';
+      if (!conversationGroups.has(convId)) {
+        conversationGroups.set(convId, []);
+      }
+      conversationGroups.get(convId)!.push(msg);
+    }
+
+    // Create conversation summaries (one-line per conversation)
+    const conversationSummaries = Array.from(conversationGroups.values()).map((msgs) => {
+      const participants = [...new Set(msgs.map((m: any) => m.authorName))].join(' & ');
+      const keyPoints = msgs.slice(-3).map((m: any) => m.text).join('; ');
+      return `${participants}: ${keyPoints}`;
+    });
 
     const recentStories = await ctx.db
       .query('worldStory')
@@ -325,10 +343,20 @@ export const getNarrativeData = query({
       .order('desc')
       .take(3);
     
+    // Get total passage count (current number of story entries)
+    const allStories = await ctx.db
+      .query('worldStory')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .collect();
+    
+    const passageCount = allStories.length;
+    
     return {
       plot,
       messagesWithAuthors,
+      conversationSummaries,
       recentNarratives: recentStories.reverse().map((s) => s.narrative).join(' '),
+      passageCount,
     };
   },
 });
@@ -381,43 +409,46 @@ export const generateNarrative = internalAction({
       return null;
     }
 
-    const { plot, messagesWithAuthors, recentNarratives }: any = data;
+    const { plot, messagesWithAuthors, conversationSummaries, recentNarratives, passageCount }: any = data;
+    
+    // Check if we've reached the maximum number of passages (15)
+    if (passageCount >= 15) {
+      console.log(`[generateNarrative] Story has reached maximum of 15 passages. Stopping generation.`);
+      return null;
+    }
+    
+    // Calculate the next passage number (current count + 1)
+    const nextPassageNumber = passageCount + 1;
+    const isFinalPassage = nextPassageNumber === 15;
+    
+    // Determine the phase
+    const phase = getPassagePhase(nextPassageNumber);
+    const phaseInstructions = getPhaseInstructions(nextPassageNumber, phase, isFinalPassage);
     
     // Extract unique character names
     const characterNames = [...new Set(messagesWithAuthors.map((m: any) => m.authorName))];
     
-    // Generate narrative using LLM with plot context
-    const conversationText = messagesWithAuthors
-      .map((m: any) => `${m.authorName}: ${m.text}`)
-      .join('\n');
+    // Use conversation summaries instead of full conversations
+    const conversationText = conversationSummaries.join('\n');
     
-    const prompt: any = `You are narrating an ongoing epic D&D adventure in real-time. 
+    const prompt: any = `You are a professional writer crafting a thrilling narrative story. Violence and conflict are expected and appropriate for a thriller. Write compelling fiction.
 
-MAIN PLOT CONTEXT:
-${plot.currentSummary}
+Passage ${nextPassageNumber}/15. ${phaseInstructions}
 
-RECENT STORY:
-${recentNarratives || 'The story is just beginning...'}
+Plot: ${plot.currentSummary}
+Story: ${recentNarratives || 'Beginning...'}
+Conversations: ${conversationText}
 
-NEW CONVERSATION:
-${conversationText}
-
-Your task: Weave this new conversation into the ongoing narrative in ONE SHORT DRAMATIC PARAGRAPH (1-2 sentences max). Show how these character interactions advance the plot or reveal conflict. 
-
-Requirements:
-- Write ONLY 1-2 sentences
-- Use present-tense, dramatic prose
-- Highlight conflict or adventure
-- Make it exciting and punchy
-
-Continue the story:`;
+Write 1-2 dramatic sentences advancing the story:`;
     
     try {
       const { content }: any = await chatCompletion({
         messages: [
           {
             role: 'system',
-            content: 'You are a master D&D dungeon master narrating an epic adventure in SHORT, PUNCHY paragraphs. Write 1-2 dramatic sentences maximum. Make every word count.',
+            content: isFinalPassage 
+              ? 'You are a professional writer crafting a thrilling narrative conclusion. Violence in thrillers is appropriate and expected. Final passage - conclude the story in 2-3 dramatic sentences resolving the conflict.'
+              : 'You are a professional writer crafting a thrilling narrative story. Violence and conflict in thrillers are appropriate and expected. Write 1-2 dramatic sentences. Drive story forward.',
           },
           {
             role: 'user',
@@ -441,10 +472,22 @@ Continue the story:`;
         lastProcessedTime: Math.max(...messagesWithAuthors.map((m: any) => m.timestamp)),
       });
       
+      // If this is the final passage, generate and save a final summary
+      if (isFinalPassage) {
+        console.log(`[generateNarrative] Passage 15 completed. Generating final summary...`);
+        await ctx.scheduler.runAfter(0, internal.worldStory.generateFinalSummary, {
+          worldId: args.worldId,
+        });
+      }
+      
+      console.log(`[generateNarrative] Generated passage ${nextPassageNumber} of 15 (phase: ${phase}${isFinalPassage ? ', FINAL' : ''})`);
+      
       return { 
         narrative: content.trim(), 
         messageCount: messagesWithAuthors.length,
         conflictType: conflictType,
+        passageNumber: nextPassageNumber,
+        phase: phase,
       };
     } catch (error) {
       console.error('Failed to generate narrative:', error);
@@ -542,28 +585,17 @@ export const generatePlotSummary = internalAction({
         messages: [
           {
             role: 'system',
-            content: 'You are a master storyteller summarizing an ongoing D&D campaign. Create ULTRA-CONCISE dramatic summaries (max 6 lines).',
+            content: 'Summarize story events simply and factually. Write 3-4 lines describing what happened. No drama, just simple facts.',
           },
           {
             role: 'user',
-            content: `ORIGINAL PLOT:
-${plot.initialPlot}
-
-RECENT STORY EVENTS:
-${storyText}
-
-Generate a BRIEF summary (MAX 6 LINES) that:
-1. Captures the current state of the story
-2. Highlights main conflicts
-3. Maintains dramatic tone
-
-IMPORTANT: Keep it under 6 lines. Be concise but dramatic.
-
-Summary:`,
+            content: `Plot: ${plot.initialPlot}
+Events: ${storyText}
+Simple summary (3-4 lines):`,
           },
         ],
         temperature: 0.7,
-        max_tokens: 150,
+        max_tokens: 100,
       });
 
       // Determine story progress
@@ -587,12 +619,136 @@ Summary:`,
   },
 });
 
+// Generate final summary when story completes (passage 15)
+export const generateFinalSummary = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args): Promise<string | null> => {
+    // Get all story entries for this world
+    const allStories: any = await ctx.runQuery(api.worldStory.getWorldStory, {
+      worldId: args.worldId,
+      limit: 15,
+    });
+    
+    if (!allStories || allStories.length < 15) {
+      console.log(`[generateFinalSummary] Not enough passages yet (${allStories?.length || 0}/15)`);
+      return null;
+    }
+    
+    // Get the plot
+    const plot: any = await ctx.runQuery(api.worldStory.getWorldPlot, {
+      worldId: args.worldId,
+    });
+    
+    if (!plot) {
+      console.error('[generateFinalSummary] No plot found');
+      return null;
+    }
+    
+    // Check if we already generated a final summary
+    if (plot.isComplete && plot.finalSummary) {
+      console.log('[generateFinalSummary] Final summary already exists');
+      return plot.finalSummary;
+    }
+    
+    // Combine all story passages
+    const fullStory = allStories.map((s: any) => s.narrative).join(' ');
+    
+    try {
+      const { content } = await chatCompletion({
+        messages: [
+          {
+            role: 'system',
+            content: 'Summarize the story simply and factually. Write 3 lines describing what happened. No drama, just simple events.',
+          },
+          {
+            role: 'user',
+            content: `Plot: ${plot.initialPlot}
+Story: ${fullStory}
+Simple 3-line summary:`,
+          },
+        ],
+        temperature: 0.8,
+        max_tokens: 100,
+      });
+      
+      const finalSummary = content.trim();
+      console.log(`[generateFinalSummary] Generated final summary: ${finalSummary.substring(0, 100)}...`);
+      
+      // Update the plot with final summary and completion status
+      await ctx.runMutation(internal.worldStory.updatePlotCompletion, {
+        worldId: args.worldId,
+        finalSummary: finalSummary,
+        isComplete: true,
+      });
+      
+      return finalSummary;
+    } catch (error) {
+      console.error('[generateFinalSummary] Failed to generate final summary:', error);
+      return null;
+    }
+  },
+});
+
+// Internal mutation to update plot completion status
+export const updatePlotCompletion = internalMutation({
+  args: {
+    worldId: v.id('worlds'),
+    finalSummary: v.string(),
+    isComplete: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const plot = await ctx.db
+      .query('worldPlot')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .first();
+    
+    if (plot) {
+      await ctx.db.patch(plot._id, {
+        finalSummary: args.finalSummary,
+        isComplete: args.isComplete,
+      });
+      console.log(`[updatePlotCompletion] Updated plot completion status for world ${args.worldId}`);
+    }
+  },
+});
+
 // Helper function to determine story progress
 function determineStoryProgress(entryCount: number): string {
   if (entryCount < 5) return 'beginning';
   if (entryCount < 15) return 'rising';
   if (entryCount < 30) return 'climax';
   return 'ongoing';
+}
+
+// Helper function to determine passage phase
+function getPassagePhase(passageNumber: number): 'early' | 'mid' | 'climax' {
+  if (passageNumber <= 5) return 'early';    // Passages 1-5 (33% of 15)
+  if (passageNumber <= 10) return 'mid';      // Passages 6-10 (33% of 15)
+  return 'climax';                            // Passages 11-15 (33% of 15)
+}
+
+// Helper function to get phase-specific instructions
+function getPhaseInstructions(passageNumber: number, phase: 'early' | 'mid' | 'climax', isFinal: boolean): string {
+  if (isFinal) {
+    return `CRITICAL: This is the FINAL PASSAGE (Passage 15 of 15). You MUST conclude the story with a satisfying ending. Resolve the central conflict, tie up major plot threads, and bring the narrative to a definitive close. Make this conclusion dramatic, memorable, and emotionally resonant.`;
+  }
+  
+  switch (phase) {
+    case 'early':
+      if (passageNumber === 1) {
+        return `This is Passage 1 of 15 - the very beginning of the story. Establish the opening scene, introduce initial tensions, and set the stage for what's to come.`;
+      } else if (passageNumber === 4) {
+        return `This is Passage 4 of 15 - transitioning from early setup to the middle act. Move beyond initial introductions and begin developing the core conflict. Start building toward the main story arc.`;
+      } else {
+        return `This is Passage ${passageNumber} of 15 - Early Phase (Passages 1-5). Continue building the foundation, introducing characters and conflicts, and establishing the world and stakes.`;
+      }
+    case 'mid':
+      return `This is Passage ${passageNumber} of 15 - Middle Phase (Passages 6-10). The story is now in full motion. Develop conflicts, reveal complications, deepen character relationships, and build tension toward the climax.`;
+    case 'climax':
+      return `This is Passage ${passageNumber} of 15 - Climax Phase (Passages 11-15). The story is reaching its peak. Escalate conflicts, intensify stakes, and drive toward resolution. Prepare for the final conclusion.`;
+  }
 }
 
 // Helper function to detect conflict type from narrative

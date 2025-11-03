@@ -1,7 +1,8 @@
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import ReactModal from 'react-modal';
 
 export function WorldStory({
   worldId,
@@ -13,8 +14,24 @@ export function WorldStory({
   const storyEntries = useQuery(api.worldStory.getWorldStory, { worldId, limit: 100 });
   const worldPlot = useQuery(api.worldStory.getWorldPlot, { worldId });
   const initializePlot = useMutation(api.worldStory.initializePlot);
+  const resetStory = useMutation(api.worldStory.resetWorldStory);
   
   const storyScrollRef = useRef<HTMLDivElement>(null);
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [hasShownModal, setHasShownModal] = useState(false);
+  
+  // Show modal when story is complete (only once)
+  useEffect(() => {
+    if (worldPlot?.isComplete && worldPlot?.finalSummary && !hasShownModal) {
+      setShowCompletionModal(true);
+      setHasShownModal(true);
+    }
+    // Reset modal state when story is reset (isComplete becomes false)
+    if (worldPlot && !worldPlot.isComplete && hasShownModal) {
+      setHasShownModal(false);
+      setShowCompletionModal(false);
+    }
+  }, [worldPlot?.isComplete, worldPlot?.finalSummary, hasShownModal]);
 
   // Initialize plot if it doesn't exist
   useEffect(() => {
@@ -165,7 +182,81 @@ export function WorldStory({
           </div>
         </div>
       </div>
+      
+      {/* Story Completion Modal */}
+      <ReactModal
+        isOpen={showCompletionModal}
+        onRequestClose={() => setShowCompletionModal(false)}
+        style={completionModalStyles}
+        contentLabel="Story Complete"
+        ariaHideApp={false}
+      >
+        <div className="font-body text-brown-100">
+          <h2 className="text-center text-4xl font-bold font-display text-clay-400 mb-6">
+            🎭 The Tale Has Ended 🎭
+          </h2>
+          
+          <div className="bg-brown-800 p-4 rounded mb-6 border-2 border-brown-600">
+            <h3 className="text-clay-300 font-bold text-lg mb-3 text-center">What Happened:</h3>
+            <div className="text-brown-100 text-base leading-relaxed whitespace-pre-line">
+              {worldPlot?.finalSummary?.split('\n').map((line, idx) => (
+                <p key={idx} className="mb-2">{line}</p>
+              ))}
+            </div>
+          </div>
+          
+          <div className="flex gap-4 justify-center">
+            <button
+              onClick={() => {
+                setShowCompletionModal(false);
+              }}
+              className="bg-brown-700 hover:bg-brown-600 text-brown-100 px-6 py-3 rounded font-bold uppercase tracking-wide transition-all hover:scale-105 active:scale-95 border-2 border-brown-900"
+            >
+              Continue Reading
+            </button>
+            <button
+              onClick={async () => {
+                if (confirm('Reset the simulation? This will start a new story with a fresh plot.')) {
+                  try {
+                    setShowCompletionModal(false);
+                    await resetStory({ worldId });
+                  } catch (error) {
+                    console.error('Failed to reset story:', error);
+                    alert('Failed to reset story. Please try again.');
+                  }
+                }
+              }}
+              className="bg-clay-700 hover:bg-clay-600 text-clay-100 px-6 py-3 rounded font-bold uppercase tracking-wide transition-all hover:scale-105 active:scale-95 border-2 border-clay-900"
+            >
+              🔄 Reset Simulation
+            </button>
+          </div>
+        </div>
+      </ReactModal>
     </div>
   );
 }
+
+const completionModalStyles = {
+  overlay: {
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    zIndex: 20,
+  },
+  content: {
+    top: '50%',
+    left: '50%',
+    right: 'auto',
+    bottom: 'auto',
+    marginRight: '-50%',
+    transform: 'translate(-50%, -50%)',
+    maxWidth: '600px',
+    width: '90%',
+    border: '10px solid rgb(139, 90, 43)',
+    borderRadius: '0',
+    background: 'rgb(55, 48, 38)',
+    color: 'white',
+    fontFamily: '"Upheaval Pro", "sans-serif"',
+    padding: '30px',
+  },
+};
 

@@ -75,12 +75,14 @@ export const generateWorldStories = internalMutation({
   handler: async (ctx, args) => {
     const worlds = await ctx.db.query('worlds').collect();
     
-    for (const world of worlds) {
-      // Schedule story generation for this world (run as action)
-      await ctx.scheduler.runAfter(0, internal.worldStory.generateNarrative, {
-        worldId: world._id,
-      });
-    }
+    // Parallelize story generation for all worlds
+    await Promise.all(
+      worlds.map((world) =>
+        ctx.scheduler.runAfter(0, internal.worldStory.generateNarrative, {
+          worldId: world._id,
+        })
+      )
+    );
   },
 });
 
@@ -90,12 +92,14 @@ export const generatePlotSummaries = internalMutation({
   handler: async (ctx, args) => {
     const worlds = await ctx.db.query('worlds').collect();
     
-    for (const world of worlds) {
-      // Schedule summary generation for this world (run as action)
-      await ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummary, {
-        worldId: world._id,
-      });
-    }
+    // Parallelize summary generation for all worlds
+    await Promise.all(
+      worlds.map((world) =>
+        ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummary, {
+          worldId: world._id,
+        })
+      )
+    );
   },
 });
 

@@ -102,7 +102,7 @@ export function getLLMConfig(): LLMConfig {
   return {
     provider: 'ollama',
     url: 'http://host.docker.internal:11434',
-    chatModel: 'llama3',
+    chatModel: 'llama3.2:1b',
     embeddingModel: 'mxbai-embed-large',
     stopWords: ['<|eot_id|>'],
     apiKey: undefined,
@@ -139,6 +139,12 @@ export async function chatCompletion(
 ) {
   const config = getLLMConfig();
   body.model = body.model ?? config.chatModel;
+  
+  // Ensure model exists for Ollama (check and pull if needed)
+  if (config.provider === 'ollama') {
+    await ensureModelExists(body.model!);
+  }
+  
   const stopWords = body.stop ? (typeof body.stop === 'string' ? [body.stop] : body.stop) : [];
   if (config.stopWords) stopWords.push(...config.stopWords);
   console.log(body);
@@ -187,17 +193,89 @@ export async function chatCompletion(
   };
 }
 
-export async function tryPullOllama(model: string, error: string) {
-  if (error.includes('try pulling')) {
-    console.error('Embedding model not found, pulling from Ollama');
-    const pullResp = await fetch(getLLMConfig().url + '/api/pull', {
-      method: 'POST',
+// Check if a model exists in Ollama
+async function checkModelExists(model: string): Promise<boolean> {
+  try {
+    const config = getLLMConfig();
+    if (config.provider !== 'ollama') return true; // Only check for Ollama
+    
+    const listResp = await fetch(config.url + '/api/tags', {
+      method: 'GET',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ name: model }),
     });
-    console.log('Pull response', await pullResp.text());
+    
+    if (!listResp.ok) {
+      console.warn(`[checkModelExists] Failed to list models: ${listResp.status}`);
+      return false;
+    }
+    
+    const data = await listResp.json();
+    const models = data.models || [];
+    const modelExists = models.some((m: any) => m.name === model || m.name.startsWith(model + ':'));
+    return modelExists;
+  } catch (error) {
+    console.error(`[checkModelExists] Error checking model ${model}:`, error);
+    return false;
+  }
+}
+
+// Ensure model exists, pull if needed
+async function ensureModelExists(model: string): Promise<void> {
+  const config = getLLMConfig();
+  if (config.provider !== 'ollama') return; // Only for Ollama
+  
+  const exists = await checkModelExists(model);
+  if (!exists) {
+    console.log(`[ensureModelExists] Model ${model} not found, pulling from Ollama...`);
+    try {
+      const pullResp = await fetch(config.url + '/api/pull', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name: model }),
+      });
+      
+      if (!pullResp.ok) {
+        const errorText = await pullResp.text();
+        console.error(`[ensureModelExists] Failed to pull model ${model}: ${errorText}`);
+        throw new Error(`Failed to pull model ${model}`);
+      }
+      
+      // Wait for model to be available - poll until it exists (max 5 minutes)
+      console.log(`[ensureModelExists] Waiting for model ${model} to finish downloading...`);
+      const maxWaitTime = 300000; // 5 minutes max
+      const pollInterval = 2000; // Check every 2 seconds
+      const startTime = Date.now();
+      
+      while (Date.now() - startTime < maxWaitTime) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        if (await checkModelExists(model)) {
+          console.log(`[ensureModelExists] Model ${model} is now available`);
+          return;
+        }
+      }
+      
+      // Final check after timeout
+      if (await checkModelExists(model)) {
+        console.log(`[ensureModelExists] Model ${model} is now available`);
+        return;
+      }
+      
+      throw new Error(`Model ${model} pull did not complete within ${maxWaitTime / 1000} seconds`);
+    } catch (error) {
+      console.error(`[ensureModelExists] Error pulling model ${model}:`, error);
+      throw error;
+    }
+  }
+}
+
+export async function tryPullOllama(model: string, error: string) {
+  if (error.includes('try pulling')) {
+    console.error('Model not found, pulling from Ollama');
+    await ensureModelExists(model);
     throw { retry: true, error: `Dynamically pulled model. Original error: ${error}` };
   }
 }
@@ -205,6 +283,8 @@ export async function tryPullOllama(model: string, error: string) {
 export async function fetchEmbeddingBatch(texts: string[]) {
   const config = getLLMConfig();
   if (config.provider === 'ollama') {
+    // Ensure embedding model exists for Ollama
+    await ensureModelExists(config.embeddingModel);
     return {
       ollama: true as const,
       embeddings: await Promise.all(
