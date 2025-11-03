@@ -77,9 +77,22 @@ done
 print_status "Old processes cleaned up"
 echo ""
 
-# Step 3: Stop old containers
+# Step 3: Stop old containers and clean database
 echo "3️⃣  Stopping old Docker containers..."
 docker compose down 2>/dev/null || true
+
+# Remove any running backend containers that might hold the volume
+docker rm -f ai-town-backend-1 2>/dev/null || true
+
+# Delete the database volume to start fresh
+if docker volume ls | grep -q "ai-town_data"; then
+    print_info "Deleting old database volume for fresh start..."
+    docker volume rm ai-town_data 2>/dev/null || true
+    print_status "Database volume deleted"
+else
+    print_status "No existing database volume found"
+fi
+
 print_status "Old containers stopped"
 echo ""
 
@@ -136,16 +149,25 @@ echo ""
 
 # Step 6: Wait for backend to be healthy
 echo "6️⃣  Waiting for backend to be ready..."
-for i in {1..30}; do
+# Backend needs time to bootstrap (60-90s), and may restart due to memory pressure
+# Wait up to 120 seconds, checking every 2 seconds
+for i in {1..60}; do
+    # Check if container is running first
+    if ! docker ps --format '{{.Names}}' | grep -q '^ai-town-backend-1$'; then
+        sleep 2
+        continue
+    fi
+    # Then check if endpoint responds
     if curl -f http://localhost:3210/version > /dev/null 2>&1; then
         print_status "Backend is ready"
         break
     fi
-    if [ $i -eq 30 ]; then
-        print_error "Backend failed to start"
+    if [ $i -eq 60 ]; then
+        print_error "Backend failed to start after 120 seconds"
+        print_error "Check logs with: docker logs ai-town-backend-1"
         exit 1
     fi
-    sleep 1
+    sleep 2
 done
 echo ""
 
@@ -211,14 +233,76 @@ echo ""
 
 # Step 12: Deploy Convex functions
 echo "1️⃣2️⃣  Deploying Convex functions..."
-npx convex deploy -y > /dev/null 2>&1
-print_status "Convex functions deployed"
+
+# Verify backend is ready
+if ! curl -f http://localhost:3210/version > /dev/null 2>&1; then
+    print_error "Backend not responding. Waiting 10s and retrying..."
+    sleep 10
+    if ! curl -f http://localhost:3210/version > /dev/null 2>&1; then
+        print_error "Backend still not responding. Check: docker logs ai-town-backend-1"
+        exit 1
+    fi
+fi
+
+# Deploy with output visible (not hidden)
+print_info "Deploying to http://127.0.0.1:3210..."
+if npx convex deploy --typecheck=disable -y; then
+    print_status "Convex functions deployed successfully"
+else
+    DEPLOY_EXIT=$?
+    print_error "Deployment failed (exit code: $DEPLOY_EXIT)"
+    print_info "If this persists, try manually: npx convex dev"
+    exit 1
+fi
 echo ""
 
-# Step 13: Initialize world
-echo "1️⃣3️⃣  Initializing world with characters..."
+# Step 13: Initialize world and clear old story data
+echo "1️⃣3️⃣  Initializing world with characters and clearing old data..."
+
+# Initialize/reinitialize the world (this creates a fresh world or regenerates characters)
+print_info "Initializing/Reinitializing world..."
 npx convex run init:default > /dev/null 2>&1
 print_status "World initialized"
+
+# Wait a moment for world to be fully created
+sleep 3
+
+# Now get the world ID and clear ALL old data
+print_info "Clearing ALL old data (conversations, plots, passages, memories, character descriptions)..."
+WORLD_STATUS=$(npx convex run world:defaultWorldStatus 2>&1 || echo '{}')
+WORLD_ID=$(echo "$WORLD_STATUS" | grep -o '"worldId":"[^"]*"' | cut -d'"' -f4 || echo "")
+
+if [ -z "$WORLD_ID" ] || [ "$WORLD_ID" = "null" ] || [ "$WORLD_ID" = "" ]; then
+    print_info "⚠️  Warning: Could not extract world ID. Status output:"
+    echo "$WORLD_STATUS" | head -3 || true
+    print_info "Skipping data cleanup - world may not be initialized yet"
+else
+    print_info "Found world ID: $WORLD_ID"
+    print_info "Calling resetWorldStory to clear all old data..."
+    
+    # Call the reset function and capture output
+    RESET_RESULT=$(npx convex run worldStory:resetWorldStory "{\"worldId\":\"$WORLD_ID\"}" 2>&1)
+    RESET_EXIT_CODE=$?
+    
+    if [ $RESET_EXIT_CODE -eq 0 ]; then
+        # Check if the result contains success indicators
+        if echo "$RESET_RESULT" | grep -qi '"success":true\|successfully\|Cleared\|Reset'; then
+            print_status "✓ All old story data cleared successfully"
+            # Try to extract deletion counts from the message
+            if echo "$RESET_RESULT" | grep -q "Cleared"; then
+                DELETED=$(echo "$RESET_RESULT" | grep -o "Cleared [0-9]*" | head -1 || echo "")
+                [ -n "$DELETED" ] && echo "$DELETED"
+            fi
+        else
+            print_info "Reset executed. Response:"
+            echo "$RESET_RESULT" | head -5 || true
+        fi
+    else
+        print_info "⚠️  Reset function returned exit code $RESET_EXIT_CODE. Output:"
+        echo "$RESET_RESULT" | head -5 || true
+    fi
+fi
+print_status "World initialized and cleaned"
 echo ""
 
 # Step 14: Kick the engine (optional - engine starts automatically after init)
