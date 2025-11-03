@@ -34,7 +34,7 @@ export const INVITE_ACCEPT_PROBABILITY = 0.8;
 export const INVITE_TIMEOUT = 60000;
 
 // Wait for another player to say something before jumping in.
-export const AWKWARD_CONVERSATION_TIMEOUT = 60_000; // more time locally
+export const AWKWARD_CONVERSATION_TIMEOUT = 10_000; // Reduced for faster conversations
 // export const AWKWARD_CONVERSATION_TIMEOUT = 20_000;
 
 // Leave a conversation after participating too long.
@@ -52,14 +52,14 @@ export const INPUT_DELAY = 1000;
 // This is over-fetched by 10x so we can prioritize memories by more than relevance.
 export const NUM_MEMORIES_TO_SEARCH = 3;
 
-// Wait for at least two seconds before sending another message.
-export const MESSAGE_COOLDOWN = 2000;
+// Wait for at least 800ms before sending another message (reduced for faster conversations).
+export const MESSAGE_COOLDOWN = 800;
 
 // Don't run a turn of the agent more than once a second.
 export const AGENT_WAKEUP_THRESHOLD = 1000;
 
-// How old we let memories be before we vacuum them
-export const VACUUM_MAX_AGE = 2 * 7 * 24 * 60 * 60 * 1000;
+// How old entries can be before we vacuum them (reduced from 2 weeks to 1 day to keep DB small)
+export const VACUUM_MAX_AGE = 1 * 24 * 60 * 60 * 1000; // 1 day instead of 2 weeks
 export const DELETE_BATCH_SIZE = 64;
 
 export const HUMAN_IDLE_TOO_LONG = 5 * 60 * 1000;

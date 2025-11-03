@@ -59,10 +59,11 @@ export async function startConversationMessage(
     messages: [
       {
         role: 'system',
-        content: prompt.join('\n'),
+        content: prompt.join('\n') + '\n\nWrite exactly one short line. Maximum one sentence. Keep it simple and narrative - focus on what you\'re doing or thinking, not elaborate descriptions. Be creative and varied in your responses.',
       },
     ],
-    max_tokens: 300,
+    max_tokens: 60,
+    temperature: 0.85,
     stop: stopWords(otherPlayer.name, player.name),
   });
   return trimContentPrefx(content, lastPrompt);
@@ -106,7 +107,7 @@ export async function continueConversationMessage(
   prompt.push(...relatedMemoriesPrompt(memories));
   prompt.push(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
-    `DO NOT greet them again. Do NOT use the word "Hey" too often. Your response should be brief and within 200 characters.`,
+    `DO NOT greet them again. Do NOT use the word "Hey" too often. Write exactly one short line. Maximum one sentence. Keep it simple and narrative - focus on actions and thoughts, not elaborate descriptions. Be creative, varied, and show your personality through your responses.`,
   );
 
   const llmMessages: LLMMessage[] = [
@@ -127,7 +128,8 @@ export async function continueConversationMessage(
 
   const { content } = await chatCompletion({
     messages: llmMessages,
-    max_tokens: 300,
+    max_tokens: 60,
+    temperature: 0.85,
     stop: stopWords(otherPlayer.name, player.name),
   });
   return trimContentPrefx(content, lastPrompt);
@@ -156,7 +158,7 @@ export async function leaveConversationMessage(
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
   prompt.push(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
-    `How would you like to tell them that you're leaving? Your response should be brief and within 200 characters.`,
+    `How would you like to tell them that you're leaving? Write exactly one short line. Maximum one sentence. Keep it simple and narrative - focus on your action, not elaborate descriptions.`,
   );
   const llmMessages: LLMMessage[] = [
     {
@@ -176,7 +178,8 @@ export async function leaveConversationMessage(
 
   const { content } = await chatCompletion({
     messages: llmMessages,
-    max_tokens: 300,
+    max_tokens: 60,
+    temperature: 0.85,
     stop: stopWords(otherPlayer.name, player.name),
   });
   return trimContentPrefx(content, lastPrompt);
@@ -189,11 +192,16 @@ function agentPrompts(
 ): string[] {
   const prompt = [];
   if (agent) {
-    prompt.push(`About you: ${agent.identity}`);
-    prompt.push(`Your goals for the conversation: ${agent.plan}`);
+    prompt.push(`YOUR PERSONALITY AND CONVERSATION STYLE:`);
+    prompt.push(`${agent.identity}`);
+    prompt.push(`Your goals for this conversation: ${agent.plan}`);
+    prompt.push(`Remember to speak and act according to your personality traits.`);
   }
   if (otherAgent) {
-    prompt.push(`About ${otherPlayer.name}: ${otherAgent.identity}`);
+    prompt.push(`\n${otherPlayer.name.toUpperCase()}'S PERSONALITY AND CONVERSATION STYLE:`);
+    prompt.push(`${otherAgent.identity}`);
+    prompt.push(`${otherPlayer.name}'s goals: ${otherAgent.plan}`);
+    prompt.push(`Consider ${otherPlayer.name}'s personality and conversation style when responding - adapt your approach to match their traits.`);
   }
   return prompt;
 }
