@@ -65,7 +65,7 @@ export function getLLMConfig(): LLMConfig {
     return {
       provider: 'together',
       url: 'https://api.together.xyz',
-      chatModel: process.env.TOGETHER_CHAT_MODEL ?? 'meta-llama/Llama-3-8b-chat-hf',
+      chatModel: process.env.TOGETHER_CHAT_MODEL ?? 'cognitivecomputations/dolphin-2.9-llama3-8b',
       embeddingModel:
         process.env.TOGETHER_EMBEDDING_MODEL ?? 'togethercomputer/m2-bert-80M-8k-retrieval',
       stopWords: ['<|eot_id|>'],
@@ -97,12 +97,12 @@ export function getLLMConfig(): LLMConfig {
     );
   }
   // Alternative embedding model:
-  // embeddingModel: 'llama3'
+  // embeddingModel: 'dolphin-llama3:8b'
   // const OLLAMA_EMBEDDING_DIMENSION = 4096,
   return {
     provider: 'ollama',
     url: 'http://host.docker.internal:11434',
-    chatModel: 'llama3.2:1b',
+    chatModel: 'dolphin-llama3:8b',
     embeddingModel: 'mxbai-embed-large',
     stopWords: ['<|eot_id|>'],
     apiKey: undefined,
