@@ -33,7 +33,7 @@ above) are written in Python.
 
 - Game engine, database, and vector search: [Convex](https://convex.dev/)
 - Auth (Optional): [Clerk](https://clerk.com/)
-- Default chat model is `llama3` and embeddings with `mxbai-embed-large`.
+- Default chat model is `dolphin-llama3:8b` and embeddings with `mxbai-embed-large`.
 - Local inference: [Ollama](https://github.com/jmorganca/ollama)
 - Configurable for other cloud LLMs: [Together.ai](https://together.ai/) or anything that speaks the
   [OpenAI API](https://platform.openai.com/). PRs welcome to add more cloud provider support.
@@ -180,8 +180,8 @@ By default, the app tries to use Ollama to run it entirely locally.
 1. Download and install [Ollama](https://ollama.com/).
 2. Open the app or run `ollama serve` in a terminal. `ollama serve` will warn you if the app is
    already running.
-3. Run `ollama pull llama3` to have it download `llama3`.
-4. Test it out with `ollama run llama3`.
+3. Run `ollama pull dolphin-llama3:8b` to have it download `dolphin-llama3:8b`.
+4. Test it out with `ollama run dolphin-llama3:8b`.
 
 Ollama model options can be found [here](https://ollama.ai/library).
 
