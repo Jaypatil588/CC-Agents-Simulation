@@ -12,12 +12,13 @@ export default function FreezeButton() {
   const freeze = useMutation(api.testing.stop);
 
   const flipSwitch = async () => {
+    if (!defaultWorld?.worldId) return;
     if (frozen) {
       console.log('Unfreezing');
-      await unfreeze();
+      await unfreeze({ worldId: defaultWorld.worldId });
     } else {
       console.log('Freezing');
-      await freeze();
+      await freeze({ worldId: defaultWorld.worldId });
     }
   };
 

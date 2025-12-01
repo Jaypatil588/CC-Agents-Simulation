@@ -90,3 +90,46 @@ export const emergencyCleanup = internalMutation({
     return { success: true, totalDeleted };
   },
 });
+
+async function getDefaultWorld(db: DatabaseReader) {
+  const worldStatus = await db
+    .query('worldStatus')
+    .filter((q) => q.eq(q.field('isDefault'), true))
+    .first();
+  if (!worldStatus) {
+    throw new Error('No default world found');
+  }
+  const engine = await db.get(worldStatus.engineId);
+  if (!engine) {
+    throw new Error(`Engine ${worldStatus.engineId} not found`);
+  }
+  return { worldStatus, engine };
+}
+
+export const stopAllowed = query({
+  handler: async () => {
+    return !process.env.STOP_NOT_ALLOWED;
+  },
+});
+
+export const stop = mutation({
+  args: { worldId: v.id('worlds') },
+  handler: async (ctx, args) => {
+    if (process.env.STOP_NOT_ALLOWED) throw new Error('Stop not allowed');
+    await stopEngine(ctx, args.worldId);
+  },
+});
+
+export const resume = mutation({
+  args: { worldId: v.id('worlds') },
+  handler: async (ctx, args) => {
+    await startEngine(ctx, args.worldId);
+  },
+});
+
+export const kick = mutation({
+  args: { worldId: v.id('worlds') },
+  handler: async (ctx, args) => {
+    await kickEngine(ctx, args.worldId);
+  },
+});

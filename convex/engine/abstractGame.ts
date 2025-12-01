@@ -165,13 +165,59 @@ export const loadInputs = internalQuery({
     max: v.number(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    // Load inputs that are either:
+    // 1. Greater than processedInputNumber (normal case), OR
+    // 2. Unprocessed inputs (no returnValue) regardless of number (to catch missed inputs)
+    // This handles cases where processedInputNumber is out of sync with actual processed inputs
+    
+    // Get new inputs above processedInputNumber (normal case - most efficient)
+    const newInputs = await ctx.db
       .query('inputs')
       .withIndex('byInputNumber', (q) =>
         q.eq('engineId', args.engineId).gt('number', args.processedInputNumber ?? -1),
       )
       .order('asc')
       .take(args.max);
+    
+    // If we got max inputs, we're done (no need to check for unprocessed below processedInputNumber)
+    if (newInputs.length >= args.max) {
+      return newInputs;
+    }
+    
+    // Otherwise, also check for any unprocessed inputs below processedInputNumber
+    // We'll query for inputs with numbers up to processedInputNumber that don't have returnValue
+    // This is a rare case, so we only do it if we have room for more inputs
+    const remainingSlots = args.max - newInputs.length;
+    if (remainingSlots > 0 && args.processedInputNumber !== undefined && args.processedInputNumber > 0) {
+      // Query for unprocessed inputs in the range below processedInputNumber
+      // Use a range query limited to recent inputs to avoid scanning too many
+      const maxCheckNumber = args.processedInputNumber;
+      const minCheckNumber = Math.max(0, maxCheckNumber - 100); // Only check last 100 inputs
+      
+      const allRecentInputs = await ctx.db
+        .query('inputs')
+        .withIndex('byInputNumber', (q) =>
+          q.eq('engineId', args.engineId)
+        )
+        .filter((q) => 
+          q.and(
+            q.gte(q.field('number'), minCheckNumber),
+            q.lte(q.field('number'), maxCheckNumber),
+            q.eq(q.field('returnValue'), undefined)
+          )
+        )
+        .order('asc')
+        .take(remainingSlots);
+      
+      // Combine and deduplicate
+      const combined = [...newInputs, ...allRecentInputs];
+      const uniqueInputs = Array.from(
+        new Map(combined.map((input) => [input.number, input])).values(),
+      );
+      return uniqueInputs.sort((a, b) => a.number - b.number).slice(0, args.max);
+    }
+    
+    return newInputs;
   },
 });
 
