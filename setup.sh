@@ -45,6 +45,17 @@ print_info() {
     echo -e "${YELLOW}ℹ${NC} $1"
 }
 
+# Step 0: Kill all existing Docker containers and services
+echo "0️⃣  Cleaning up existing Docker containers and services..."
+print_info "Stopping all running Docker containers..."
+docker ps -q | xargs -r docker stop > /dev/null 2>&1 || true
+print_info "Removing all Docker containers..."
+docker ps -a -q | xargs -r docker rm > /dev/null 2>&1 || true
+print_info "Stopping Docker Compose services..."
+cd "$(dirname "$0")" && docker-compose down > /dev/null 2>&1 || true
+print_status "All Docker processes cleaned up"
+echo ""
+
 # Step 1: Check if Docker is running
 echo "1️⃣  Checking Docker..."
 if ! docker ps > /dev/null 2>&1; then
