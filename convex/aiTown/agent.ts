@@ -5,7 +5,6 @@ import { serializedPlayer } from './player';
 import { Game } from './game';
 import {
   ACTION_TIMEOUT,
-  AWKWARD_CONVERSATION_TIMEOUT,
   CONVERSATION_COOLDOWN,
   CONVERSATION_DISTANCE,
   INVITE_ACCEPT_PROBABILITY,
@@ -160,19 +159,13 @@ export class Agent {
       }
       if (member.status.kind === 'participating') {
         const started = member.status.started;
-        if (conversation.isTyping && conversation.isTyping.playerId !== player.id) {
-          // Wait for the other player to finish typing.
-          return;
-        }
         if (!conversation.lastMessage) {
+          // Only the initiator can send the first message - strict turn-taking from the start.
           const isInitiator = conversation.creator === player.id;
-          const awkwardDeadline = started + AWKWARD_CONVERSATION_TIMEOUT;
-          // Send the first message if we're the initiator or if we've been waiting for too long.
-          if (isInitiator || awkwardDeadline < now) {
-            // Grab the lock on the conversation and send a "start" message.
+          if (isInitiator) {
+            // Send a "start" message.
             console.log(`${player.id} initiating conversation with ${otherPlayer.id}.`);
             const messageUuid = crypto.randomUUID();
-            conversation.setIsTyping(now, player, messageUuid);
             this.startOperation(game, now, 'agentGenerateMessage', {
               worldId: game.worldId,
               playerId: player.id,
@@ -184,7 +177,7 @@ export class Agent {
             });
             return;
           } else {
-            // Wait on the other player to say something up to the awkward deadline.
+            // Non-initiator must wait for the initiator to send the first message.
             return;
           }
         }
@@ -193,7 +186,6 @@ export class Agent {
         if (tooLongDeadline < now || conversation.numMessages > MAX_CONVERSATION_MESSAGES) {
           console.log(`${player.id} leaving conversation with ${otherPlayer.id}.`);
           const messageUuid = crypto.randomUUID();
-          conversation.setIsTyping(now, player, messageUuid);
           this.startOperation(game, now, 'agentGenerateMessage', {
             worldId: game.worldId,
             playerId: player.id,
@@ -205,22 +197,22 @@ export class Agent {
           });
           return;
         }
-        // Wait for the awkward deadline if we sent the last message.
+        // STRICT TURN-TAKING: If this agent was the last speaker, they must wait for another agent to speak.
+        // This prevents an agent from speaking multiple times in a single generation/step.
         if (conversation.lastMessage.author === player.id) {
-          const awkwardDeadline = conversation.lastMessage.timestamp + AWKWARD_CONVERSATION_TIMEOUT;
-          if (now < awkwardDeadline) {
-            return;
-          }
+          // This agent already spoke - they must wait for the other agent to respond.
+          // Do not allow them to speak again, regardless of timing.
+          return;
         }
+        
         // Wait for a cooldown after the last message to simulate "reading" the message.
         const messageCooldown = conversation.lastMessage.timestamp + MESSAGE_COOLDOWN;
         if (now < messageCooldown) {
           return;
         }
-        // Grab the lock and send a message!
+        // Send a message!
         console.log(`${player.id} continuing conversation with ${otherPlayer.id}.`);
         const messageUuid = crypto.randomUUID();
-        conversation.setIsTyping(now, player, messageUuid);
         this.startOperation(game, now, 'agentGenerateMessage', {
           worldId: game.worldId,
           playerId: player.id,
