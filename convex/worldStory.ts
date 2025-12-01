@@ -1,8 +1,13 @@
 import { v } from 'convex/values';
-import { internalAction, internalMutation, mutation, query } from './_generated/server';
+import { internalAction, internalMutation, internalQuery, mutation, query } from './_generated/server';
 import { Id } from './_generated/dataModel';
 import { api, internal } from './_generated/api';
 import { chatCompletion } from './util/llm';
+import {
+  STORY_GENERATION_COOLDOWN,
+  MIN_MESSAGES_FOR_STORY,
+  MIN_MESSAGES_IN_CONVERSATION,
+} from './constants';
 
 // Maximum number of story passages before completion
 const MAX_PASSAGES = 12;
@@ -83,6 +88,8 @@ export const createWorldPlot = internalMutation({
       initialPlot: args.initialPlot,
       currentSummary: args.currentSummary,
       lastProcessedMessageTime: 0,
+      processedMessageIds: [],
+      lastStoryGenerationTime: undefined,
       storyProgress: 'beginning',
       lastSummaryTime: Date.now(),
     });
@@ -359,17 +366,98 @@ export const initializeWorldPlot = internalAction({
   },
 });
 
-// Generate emojis for conversations based on summaries (simplified - emoji logic already exists in frontend)
-async function generateConversationEmojis(
-  ctx: any,
-  worldId: Id<'worlds'>,
-  conversationSummaries: string[],
-  characterNames: string[],
-) {
-  // Emoji generation is handled by existing frontend bubble system
-  // This function is a placeholder for future refinement
-  // The conversation summaries already contain enough context for emoji assignment
-}
+// Generate emojis for conversations based on summaries (event-driven, separate from story generation)
+export const generateConversationEmojisAction = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+    conversationSummaries: v.array(v.string()),
+    characterNames: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Emoji generation is handled by existing frontend bubble system
+    // This function is a placeholder for future refinement
+    // The conversation summaries already contain enough context for emoji assignment
+    // Can be enhanced later to generate emojis via LLM if needed
+  },
+});
+
+// Check if story generation should be triggered (internal query)
+export const shouldTriggerStoryGeneration = internalQuery({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args) => {
+    const plot = await ctx.db
+      .query('worldPlot')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .first();
+
+    if (!plot) {
+      return { shouldTrigger: false, reason: 'No plot found' };
+    }
+
+    // Check cooldown
+    const now = Date.now();
+    const lastGeneration = plot.lastStoryGenerationTime || 0;
+    if (now - lastGeneration < STORY_GENERATION_COOLDOWN) {
+      return {
+        shouldTrigger: false,
+        reason: `Cooldown active (${Math.round((STORY_GENERATION_COOLDOWN - (now - lastGeneration)) / 1000)}s remaining)`,
+      };
+    }
+
+    // Get conversation stacks
+    const stacks: Record<string, any[]> = plot.conversationStacks || {};
+    const processedIds = new Set(plot.processedMessageIds || []);
+
+    // Collect all unprocessed messages
+    const allUnprocessedMessages: any[] = [];
+    for (const [playerId, messages] of Object.entries(stacks)) {
+      for (const msg of messages) {
+        const msgIdStr = typeof msg.messageId === 'string' ? msg.messageId : msg.messageId.toString();
+        if (!processedIds.has(msgIdStr)) {
+          allUnprocessedMessages.push(msg);
+        }
+      }
+    }
+
+    // Check if we have enough new messages
+    if (allUnprocessedMessages.length < MIN_MESSAGES_FOR_STORY) {
+      return {
+        shouldTrigger: false,
+        reason: `Not enough new messages (${allUnprocessedMessages.length}/${MIN_MESSAGES_FOR_STORY})`,
+      };
+    }
+
+    // Group by conversation and check for meaningful conversations
+    const conversationGroups = new Map<string, any[]>();
+    for (const msg of allUnprocessedMessages) {
+      const convId = msg.conversationId?.toString() || 'unknown';
+      if (!conversationGroups.has(convId)) {
+        conversationGroups.set(convId, []);
+      }
+      conversationGroups.get(convId)!.push(msg);
+    }
+
+    // Check if we have at least one meaningful conversation (2+ messages)
+    const meaningfulConversations = Array.from(conversationGroups.values()).filter(
+      (msgs) => msgs.length >= MIN_MESSAGES_IN_CONVERSATION,
+    );
+
+    if (meaningfulConversations.length === 0) {
+      return {
+        shouldTrigger: false,
+        reason: 'No meaningful conversations (need 2+ messages per conversation)',
+      };
+    }
+
+    return {
+      shouldTrigger: true,
+      unprocessedMessageCount: allUnprocessedMessages.length,
+      meaningfulConversationCount: meaningfulConversations.length,
+    };
+  },
+});
 
 // Internal mutation to push message to conversation stack
 export const pushToConversationStackMutation = internalMutation({
@@ -387,7 +475,7 @@ export const pushToConversationStackMutation = internalMutation({
       .query('worldPlot')
       .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
       .first();
-    
+
     if (!plot) {
       return;
     }
@@ -426,6 +514,7 @@ export const pushToConversationStack = internalAction({
     timestamp: v.number(),
   },
   handler: async (ctx, args) => {
+    // Push message to stack
     await ctx.runMutation(internal.worldStory.pushToConversationStackMutation, {
       worldId: args.worldId,
       playerId: args.playerId,
@@ -435,6 +524,21 @@ export const pushToConversationStack = internalAction({
       authorName: args.authorName,
       timestamp: args.timestamp,
     });
+
+    // Check if we should trigger story generation (event-driven)
+    const triggerCheck = await ctx.runQuery(internal.worldStory.shouldTriggerStoryGeneration, {
+      worldId: args.worldId,
+    });
+
+    if (triggerCheck.shouldTrigger) {
+      console.log(
+        `[pushToConversationStack] Triggering story generation: ${triggerCheck.unprocessedMessageCount} new messages, ${triggerCheck.meaningfulConversationCount} meaningful conversations`,
+      );
+      // Schedule story generation (with small delay to batch multiple messages)
+      await ctx.scheduler.runAfter(2000, internal.worldStory.generateNarrative, {
+        worldId: args.worldId,
+      });
+    }
   },
 });
 
@@ -455,11 +559,17 @@ export const getNarrativeData = query({
 
     // Get conversation stacks instead of time-based filtering
     const stacks: Record<string, any[]> = plot.conversationStacks || {};
+    const processedIds = new Set(plot.processedMessageIds || []);
     
-    // Collect all messages from all stacks
+    // Collect all UNPROCESSED messages from all stacks
     const allStackMessages: any[] = [];
     for (const [playerId, messages] of Object.entries(stacks)) {
-      allStackMessages.push(...messages);
+      for (const msg of messages) {
+        const msgIdStr = typeof msg.messageId === 'string' ? msg.messageId : msg.messageId.toString();
+        if (!processedIds.has(msgIdStr)) {
+          allStackMessages.push(msg);
+        }
+      }
     }
 
     if (allStackMessages.length === 0) {
@@ -525,6 +635,7 @@ export const saveNarrative = internalMutation({
     sourceMessages: v.array(v.id('messages')),
     characterNames: v.array(v.string()),
     lastProcessedTime: v.number(),
+    processedMessageIds: v.array(v.string()), // Message IDs that were used for this story
   },
   handler: async (ctx, args) => {
     await ctx.db.insert('worldStory', {
@@ -542,10 +653,25 @@ export const saveNarrative = internalMutation({
       .first();
     
     if (plot) {
-      // Clear conversation stacks after processing
+      // Update processed message IDs (add new ones, keep existing)
+      const existingProcessedIds = new Set<string>(plot.processedMessageIds || []);
+      for (const msgId of args.processedMessageIds) {
+        existingProcessedIds.add(msgId);
+      }
+      
+      // Update tracking: processed message IDs, last processed time, last generation time
+      const now = Date.now();
       await ctx.db.patch(plot._id, {
         lastProcessedMessageTime: args.lastProcessedTime,
-        conversationStacks: {}, // Clear all stacks after processing
+        processedMessageIds: Array.from(existingProcessedIds) as string[],
+        lastStoryGenerationTime: now,
+        // Clear conversation stacks after processing (they've been used)
+        conversationStacks: {},
+      });
+      
+      // Trigger plot summary generation (event-driven, after story is saved)
+      await ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummary, {
+        worldId: args.worldId,
       });
     }
   },
@@ -665,7 +791,7 @@ export const generateNarrative = internalAction({
       return null;
     }
 
-    // Rate limiting is handled by the cron job frequency (every 10 seconds)
+    // Event-driven generation (triggered by conversation completion)
     // Calculate the next passage number (current count + 1)
     const nextPassageNumber = passageCount + 1;
     const isFinalPassage = nextPassageNumber === MAX_PASSAGES;
@@ -675,20 +801,36 @@ export const generateNarrative = internalAction({
     const phaseInstructions = getPhaseInstructions(nextPassageNumber, phase, isFinalPassage);
     
     // Extract unique character names
-    const characterNames: string[] = [...new Set(messagesWithAuthors.map((m: any) => m.authorName as string))];
+    const characterNames: string[] = Array.from(
+      new Set(messagesWithAuthors.map((m: any) => String(m.authorName || 'Unknown'))),
+    );
     
     // Use conversation summaries instead of full conversations
     const conversationText = conversationSummaries.join('\n');
+    
+    // Get previous 1-2 paragraphs for context (what already happened)
+    // recentNarratives is already a string of recent stories joined
+    const previousParagraphs = recentNarratives || 'Beginning of the story...';
     
     const prompt: any = `You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction writing - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose, not promoting real-world harm.
 
 Passage ${nextPassageNumber}/${MAX_PASSAGES}. ${phaseInstructions}
 
-Plot: ${plot.currentSummary}
-Story: ${recentNarratives || 'Beginning...'}
-Conversations: ${conversationText}
+WHAT ALREADY HAPPENED:
+${previousParagraphs}
 
-Write a single dramatic sentence advancing the fictional story:`;
+CURRENT SITUATION:
+Plot: ${plot.currentSummary}
+New Conversations: ${conversationText}
+
+CRITICAL REQUIREMENTS:
+- Write something NEW that ADVANCES the plot meaningfully
+- Do NOT repeat similar themes, locations, or situations from what already happened
+- Introduce a NEW development, twist, discovery, or progression
+- Each paragraph must move the story forward - avoid repetitive descriptions
+- If previous paragraphs mentioned a location/artifact/conflict, advance it or introduce something NEW
+
+Write exactly one dramatic sentence representing a NEW development:`;
     
     try {
       const { content }: any = await chatCompletion({
@@ -697,7 +839,7 @@ Write a single dramatic sentence advancing the fictional story:`;
             role: 'system',
             content: isFinalPassage 
               ? 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. Final passage - conclude the story in a single dramatic sentence resolving the conflict.'
-              : 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. Write exactly one dramatic sentence. Drive story forward.',
+              : 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. CRITICAL: Write exactly one dramatic sentence that represents a NEW development. Do NOT repeat themes, locations, or situations from previous paragraphs. Each sentence must advance the plot meaningfully.',
           },
           {
             role: 'user',
@@ -711,8 +853,19 @@ Write a single dramatic sentence advancing the fictional story:`;
       // Detect conflict type from the narrative
       const conflictType: any = detectConflictType(content);
       
-      // Generate emojis for conversations and set as player activities
-      await generateConversationEmojis(ctx, args.worldId, conversationSummaries, characterNames);
+      // Extract processed message IDs (convert to strings for tracking)
+      const processedMessageIds = messagesWithAuthors.map((m: any) => {
+        const msgId = m.id;
+        return typeof msgId === 'string' ? msgId : msgId.toString();
+      });
+      
+      // Generate emojis for conversations and set as player activities (separate event-driven process)
+      // Schedule separately - don't block story generation
+      await ctx.scheduler.runAfter(0, internal.worldStory.generateConversationEmojisAction, {
+        worldId: args.worldId,
+        conversationSummaries,
+        characterNames,
+      });
       
       // Save the narrative
       await ctx.runMutation(internal.worldStory.saveNarrative, {
@@ -722,6 +875,7 @@ Write a single dramatic sentence advancing the fictional story:`;
         sourceMessages: messagesWithAuthors.map((m: any) => m.id),
         characterNames: characterNames as string[],
         lastProcessedTime: Math.max(...messagesWithAuthors.map((m: any) => m.timestamp)),
+        processedMessageIds: processedMessageIds,
       });
       
       // If this is the final passage, generate and save a final summary
@@ -763,12 +917,7 @@ export const getPlotSummaryData = query({
       return null;
     }
 
-    // Check if we should update (every 10 seconds)
-    const now = Date.now();
-    if (now - plot.lastSummaryTime < 10000) {
-      return null; // Too soon
-    }
-
+    // Event-driven: Always update when called (triggered after story generation)
     // Get all recent story entries (last 10-15 entries)
     const recentStories = await ctx.db
       .query('worldStory')

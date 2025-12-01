@@ -34,8 +34,10 @@ export default defineSchema({
   worldPlot: defineTable({
     worldId: v.id('worlds'),
     initialPlot: v.string(), // The original epic DnD plot generated on startup
-    currentSummary: v.string(), // Latest plot summary (updated every 30s)
-    lastProcessedMessageTime: v.number(), // Track which messages we've processed
+    currentSummary: v.string(), // Latest plot summary (updated after each story)
+    lastProcessedMessageTime: v.number(), // Track which messages we've processed (by timestamp)
+    processedMessageIds: v.optional(v.array(v.string())), // Track which message IDs have been processed for story generation
+    lastStoryGenerationTime: v.optional(v.number()), // When we last generated a story (for cooldown)
     storyProgress: v.string(), // Current state of the story (beginning, rising, climax, etc)
     lastSummaryTime: v.number(), // When we last generated a summary
     finalSummary: v.optional(v.string()), // Final 3-line summary when story completes (passage 20)

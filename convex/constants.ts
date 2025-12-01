@@ -33,9 +33,8 @@ export const INVITE_ACCEPT_PROBABILITY = 0.8;
 // Wait for 1m for invites to be accepted.
 export const INVITE_TIMEOUT = 60000;
 
-// Wait for another player to say something before jumping in.
-export const AWKWARD_CONVERSATION_TIMEOUT = 10_000; // Reduced for faster conversations
-// export const AWKWARD_CONVERSATION_TIMEOUT = 20_000;
+// Maximum number of concurrent LLM calls per world (for throttling)
+export const MAX_CONCURRENT_LLM_CALLS = 5;
 
 // Leave a conversation after participating too long.
 export const MAX_CONVERSATION_DURATION = 10 * 60_000; // more time locally
@@ -77,10 +76,11 @@ export const MAX_PATHFINDS_PER_STEP = 16;
 
 export const DEFAULT_NAME = 'Me';
 
-// Conversation batching constants
-export const CONVERSATION_BATCH_INTERVAL = 1000; // Process batches every 1 second
-export const CONVERSATION_BATCH_SIZE = 50; // Max conversations per batch
-// Priority levels: Lower = higher priority
+// Priority levels: Lower = higher priority (for future use)
 export const PRIORITY_PASSAGE_GENERATION = 0;
 export const PRIORITY_SUMMARY_GENERATION = 1;
-export const PRIORITY_CONVERSATION = 100; // Conversations have lower priority
+
+// Story generation constants (event-driven)
+export const STORY_GENERATION_COOLDOWN = 30_000; // Minimum 30 seconds between story generations
+export const MIN_MESSAGES_FOR_STORY = 3; // Minimum new messages before triggering story generation
+export const MIN_MESSAGES_IN_CONVERSATION = 2; // Minimum messages in a conversation for it to be "meaningful"

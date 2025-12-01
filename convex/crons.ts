@@ -18,14 +18,8 @@ crons.interval('restart dead worlds', { seconds: 60 }, internal.world.restartDea
 // Initialize plots for new worlds
 crons.interval('initialize world plots', { seconds: 15 }, internal.crons.initializeWorldPlots);
 
-// Generate real-time story narratives every 10 seconds
-crons.interval('generate world story', { seconds: 10 }, internal.crons.generateWorldStories);
+// Story generation and plot summaries are now event-driven (triggered by conversation completion)
 
-// Generate plot summaries every 10 seconds for context (updates frequently to reflect what's going on)
-crons.interval('generate plot summaries', { seconds: 10 }, internal.crons.generatePlotSummaries);
-
-// Process conversation batches every 1 second (lower priority than passages/summaries)
-crons.interval('process conversation batches', { seconds: 1 }, internal.crons.processConversationBatches);
 
 // Vacuum old entries every 6 hours to prevent database from growing too large
 crons.interval('vacuum old entries', { hours: 6 }, internal.crons.vacuumOldEntries);
@@ -74,56 +68,9 @@ export const initializeWorldPlots = internalMutation({
   },
 });
 
-// Generate real-time story narratives
-export const generateWorldStories = internalMutation({
-  args: {},
-  handler: async (ctx, args) => {
-    const worlds = await ctx.db.query('worlds').collect();
-    
-    // Parallelize story generation for all worlds
-    await Promise.all(
-      worlds.map((world) =>
-        ctx.scheduler.runAfter(0, internal.worldStory.generateNarrative, {
-          worldId: world._id,
-        })
-      )
-    );
-  },
-});
+// Story generation and plot summaries are now event-driven
+// Removed cron-based generation - see worldStory.ts for event-driven triggers
 
-// Generate plot summaries every 10 seconds
-export const generatePlotSummaries = internalMutation({
-  args: {},
-  handler: async (ctx, args) => {
-    const worlds = await ctx.db.query('worlds').collect();
-    
-    // Parallelize summary generation for all worlds (high priority)
-    await Promise.all(
-      worlds.map((world) =>
-        ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummary, {
-          worldId: world._id,
-        })
-      )
-    );
-  },
-});
-
-// Process conversation batches for all worlds every 1 second (lower priority)
-export const processConversationBatches = internalMutation({
-  args: {},
-  handler: async (ctx, args) => {
-    const worlds = await ctx.db.query('worlds').collect();
-    
-    // Process conversation batches for all worlds (lower priority - scheduled after passages/summaries)
-    await Promise.all(
-      worlds.map((world) =>
-        ctx.scheduler.runAfter(0, internal.aiTown.agentOperations.processConversationBatch, {
-          worldId: world._id,
-        })
-      )
-    );
-  },
-});
 
 export const vacuumOldEntries = internalMutation({
   args: {},
