@@ -13,12 +13,14 @@ export function WorldStory({
 }) {
   const storyEntries = useQuery(api.worldStory.getWorldStory, { worldId, limit: 100 });
   const worldPlot = useQuery(api.worldStory.getWorldPlot, { worldId });
-  const initializePlot = useMutation(api.worldStory.initializePlot);
+  const setInitialPlot = useMutation(api.worldStory.setInitialPlot);
   const resetStory = useMutation(api.worldStory.resetWorldStory);
   
   const storyScrollRef = useRef<HTMLDivElement>(null);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [hasShownModal, setHasShownModal] = useState(false);
+  const [plotInput, setPlotInput] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   // Show modal when story is complete (only once)
   useEffect(() => {
@@ -33,14 +35,21 @@ export function WorldStory({
     }
   }, [worldPlot?.isComplete, worldPlot?.finalSummary, hasShownModal]);
 
-  // Initialize plot if it doesn't exist
-  useEffect(() => {
-    if (worldPlot === undefined) return;
-    if (worldPlot === null) {
-      console.log('Initializing world plot...');
-      initializePlot({ worldId }).catch(console.error);
+  const handleSubmitPlot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!plotInput.trim() || isSubmitting) return;
+    
+    setIsSubmitting(true);
+    try {
+      await setInitialPlot({ worldId, initialPlot: plotInput });
+      setPlotInput('');
+    } catch (error) {
+      console.error('Failed to set initial plot:', error);
+      alert('Failed to set initial plot. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
-  }, [worldPlot, worldId, initializePlot]);
+  };
 
   // Auto-scroll the story section to the bottom when new entries arrive
   useEffect(() => {
@@ -52,7 +61,7 @@ export function WorldStory({
     }
   }, [storyEntries]);
 
-  // Show loading or initialization state
+  // Show input form when no plot exists
   if (!worldPlot) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-6 text-center">
@@ -61,16 +70,31 @@ export function WorldStory({
             📜 The Chronicles
           </h2>
         </div>
-        <div className="desc max-w-md">
-          <p className="leading-tight -m-4 bg-brown-700 text-base sm:text-sm">
-            <i>
-              The Dungeon Master prepares the tale... An epic story of conflict and adventure is
-              being woven. Stand by as the realm's destiny unfolds...
-            </i>
-          </p>
-        </div>
-        <div className="mt-6 text-brown-400 text-sm animate-pulse">
-          <p>⚔️ Generating epic DnD plot...</p>
+        <div className="desc max-w-md w-full">
+          <div className="bg-brown-700 p-4 text-base sm:text-sm">
+            <p className="text-brown-100 mb-4">
+              <strong className="text-clay-400">Create Your Story Theme</strong>
+            </p>
+            <p className="text-brown-200 text-sm mb-4">
+              Provide the initial theme or plot for your story. This will guide how agents interact and how the story evolves.
+            </p>
+            <form onSubmit={handleSubmitPlot} className="flex flex-col gap-3">
+              <textarea
+                value={plotInput}
+                onChange={(e) => setPlotInput(e.target.value)}
+                placeholder="e.g., A corporate espionage thriller set in a futuristic city where AI and humans compete for control..."
+                className="w-full p-3 bg-brown-800 text-brown-100 border-2 border-brown-600 rounded resize-none focus:outline-none focus:border-clay-500 min-h-[120px] text-sm"
+                disabled={isSubmitting}
+              />
+              <button
+                type="submit"
+                disabled={!plotInput.trim() || isSubmitting}
+                className="bg-clay-700 hover:bg-clay-600 disabled:bg-brown-800 disabled:text-brown-500 disabled:cursor-not-allowed text-clay-100 px-6 py-2 rounded font-bold uppercase tracking-wide transition-all hover:scale-105 active:scale-95 border-2 border-clay-900 disabled:border-brown-900"
+              >
+                {isSubmitting ? 'Creating...' : 'Start Story'}
+              </button>
+            </form>
+          </div>
         </div>
       </div>
     );

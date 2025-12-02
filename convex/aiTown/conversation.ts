@@ -76,27 +76,50 @@ export class Conversation {
         member1.status = { kind: 'participating', started: now };
         member2.status = { kind: 'participating', started: now };
 
-        // Try to move the first player to grid point nearest the other player.
+        // Position players exactly 3 tiles apart, facing each other
+        const TARGET_CONVERSATION_DISTANCE = 3;
         const neighbors = (p: Point) => [
           { x: p.x + 1, y: p.y },
           { x: p.x - 1, y: p.y },
           { x: p.x, y: p.y + 1 },
           { x: p.x, y: p.y - 1 },
+          // Add 2-tile distance options
+          { x: p.x + 2, y: p.y },
+          { x: p.x - 2, y: p.y },
+          { x: p.x, y: p.y + 2 },
+          { x: p.x, y: p.y - 2 },
+          // Add 3-tile distance options
+          { x: p.x + 3, y: p.y },
+          { x: p.x - 3, y: p.y },
+          { x: p.x, y: p.y + 3 },
+          { x: p.x, y: p.y - 3 },
         ];
         const floorPos1 = { x: Math.floor(player1.position.x), y: Math.floor(player1.position.y) };
         const p1Candidates = neighbors(floorPos1).filter((p) => !blocked(game, now, p, player1.id));
-        p1Candidates.sort((a, b) => distance(a, player2.position) - distance(b, player2.position));
+        // Prefer positions that are exactly 3 tiles from player2
+        p1Candidates.sort((a, b) => {
+          const distA = distance(a, player2.position);
+          const distB = distance(b, player2.position);
+          // Prefer exactly 3 tiles
+          const scoreA = Math.abs(distA - TARGET_CONVERSATION_DISTANCE);
+          const scoreB = Math.abs(distB - TARGET_CONVERSATION_DISTANCE);
+          return scoreA - scoreB;
+        });
         if (p1Candidates.length > 0) {
           const p1Candidate = p1Candidates[0];
 
-          // Try to move the second player to the grid point nearest the first player's
-          // destination.
+          // Try to move the second player to a position exactly 3 tiles from the first player's destination
           const p2Candidates = neighbors(p1Candidate).filter(
             (p) => !blocked(game, now, p, player2.id),
           );
-          p2Candidates.sort(
-            (a, b) => distance(a, player2.position) - distance(b, player2.position),
-          );
+          // Prefer positions that are exactly 3 tiles from p1Candidate
+          p2Candidates.sort((a, b) => {
+            const distA = distance(a, p1Candidate);
+            const distB = distance(b, p1Candidate);
+            const scoreA = Math.abs(distA - TARGET_CONVERSATION_DISTANCE);
+            const scoreB = Math.abs(distB - TARGET_CONVERSATION_DISTANCE);
+            return scoreA - scoreB;
+          });
           if (p2Candidates.length > 0) {
             const p2Candidate = p2Candidates[0];
             movePlayer(game, now, player1, p1Candidate, true);
@@ -106,15 +129,53 @@ export class Conversation {
       }
     }
 
-    // Orient the two players towards each other if they're not moving.
+    // Orient the two players towards each other if they're participating in conversation
+    // Also ensure they maintain proper distance (1-2 tiles)
     if (member1.status.kind === 'participating' && member2.status.kind === 'participating') {
+      const currentDistance = distance(player1.position, player2.position);
+      
+      // Ensure players face each other
       const v = normalize(vector(player1.position, player2.position));
-      if (!player1.pathfinding && v) {
-        player1.facing = v;
+      if (v) {
+        // Player 1 faces towards player 2
+        if (!player1.pathfinding) {
+          player1.facing = v;
+        }
+        // Player 2 faces towards player 1 (opposite direction)
+        if (!player2.pathfinding) {
+          player2.facing.dx = -v.dx;
+          player2.facing.dy = -v.dy;
+        }
       }
-      if (!player2.pathfinding && v) {
-        player2.facing.dx = -v.dx;
-        player2.facing.dy = -v.dy;
+      
+      // If players are too close (< 2.5 tiles) or too far (> 3.5 tiles), adjust position to exactly 3 tiles
+      const TARGET_CONVERSATION_DISTANCE = 3;
+      if (currentDistance < 2.5 || currentDistance > 3.5) {
+        const targetDistance = TARGET_CONVERSATION_DISTANCE; // Target exactly 3 tiles
+        const direction = normalize(vector(player1.position, player2.position));
+        if (direction && !player1.pathfinding && !player2.pathfinding) {
+          // Calculate ideal positions
+          const midpoint = {
+            x: (player1.position.x + player2.position.x) / 2,
+            y: (player1.position.y + player2.position.y) / 2,
+          };
+          const idealPos1 = {
+            x: Math.floor(midpoint.x - direction.dx * targetDistance / 2),
+            y: Math.floor(midpoint.y - direction.dy * targetDistance / 2),
+          };
+          const idealPos2 = {
+            x: Math.floor(midpoint.x + direction.dx * targetDistance / 2),
+            y: Math.floor(midpoint.y + direction.dy * targetDistance / 2),
+          };
+          
+          // Try to move to ideal positions if not blocked
+          if (!blocked(game, now, idealPos1, player1.id)) {
+            movePlayer(game, now, player1, idealPos1, true);
+          }
+          if (!blocked(game, now, idealPos2, player2.id)) {
+            movePlayer(game, now, player2, idealPos2, true);
+          }
+        }
       }
     }
   }

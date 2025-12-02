@@ -363,8 +363,19 @@ export const agentDoSomething = internalAction({
         return;
       }
     }
+    // Check if theme AND story draft exist before allowing conversations
+    const worldPlot = await ctx.runQuery(api.worldStory.getWorldPlot, {
+      worldId: args.worldId,
+    });
+    const storyDraft = await ctx.runQuery(api.worldStory.getStoryDraftQuery, {
+      worldId: args.worldId,
+    });
+    
+    const hasTheme = worldPlot && worldPlot.initialPlot && worldPlot.initialPlot.trim().length > 0;
+    const hasDraft = storyDraft && storyDraft.draftText && storyDraft.draftText.trim().length > 0;
+    
     const invitee =
-      justLeftConversation || recentlyAttemptedInvite
+      justLeftConversation || recentlyAttemptedInvite || !hasTheme || !hasDraft
         ? undefined
         : await ctx.runQuery(internal.aiTown.agent.findConversationCandidate, {
             now,
@@ -372,6 +383,28 @@ export const agentDoSomething = internalAction({
             player: args.player,
             otherFreePlayers: args.otherFreePlayers,
           });
+    
+    if (!hasTheme || !hasDraft) {
+      // If no theme or draft, agents should just wander or do activities
+      if (!player.pathfinding) {
+        const activity = ACTIVITIES[Math.floor(Math.random() * ACTIVITIES.length)];
+        await sendInputWithRetry(
+          ctx,
+          args.worldId,
+          'finishDoSomething',
+          {
+            operationId: args.operationId,
+            agentId: agent.id,
+            activity: {
+              description: activity.description,
+              emoji: activity.emoji,
+              until: Date.now() + activity.duration,
+            },
+          },
+        );
+        return;
+      }
+    }
 
     // Use retry helper to reduce OCC errors
     await sendInputWithRetry(

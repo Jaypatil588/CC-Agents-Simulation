@@ -41,12 +41,61 @@ export async function startConversationMessage(
   const memoryWithOtherPlayer = memories.find(
     (m) => m.data.type === 'conversation' && m.data.playerIds.includes(otherPlayerId),
   );
+  // Get story theme, context, and story draft
+  const plot = await ctx.runQuery(api.worldStory.getWorldPlot, {
+    worldId,
+  });
+  const initialTheme = plot?.initialPlot || '';
+  const storyContext = plot?.currentSummary || '';
+  
+  // Get story draft
+  const storyDraft = await ctx.runQuery(api.worldStory.getStoryDraftQuery, {
+    worldId,
+  });
+  
+  // Extract beginning of story draft (first 2-3 sentences)
+  let storyDraftBeginning = '';
+  if (storyDraft?.draftText) {
+    const sentences = storyDraft.draftText.split(/[.!?]+/).filter(s => s.trim().length > 0);
+    storyDraftBeginning = sentences.slice(0, 3).join('. ').trim() + '.';
+  }
+
   const prompt = [
     `You are ${player.name}, and you just started a conversation with ${otherPlayer.name}.`,
   ];
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
   prompt.push(...previousConversationPrompt(otherPlayer, lastConversation));
   prompt.push(...relatedMemoriesPrompt(memories));
+  
+  // Include story draft beginning
+  if (storyDraftBeginning) {
+    prompt.push(
+      `\nSTORY CONTEXT (Beginning of the story):\n${storyDraftBeginning}\n\nThis is how the story begins. Your conversations should drive the plot forward based on this context.`,
+    );
+  }
+  
+  if (initialTheme) {
+    prompt.push(
+      `\nSTORY THEME:\n${initialTheme}\n\nThis is the central theme of the story. Your conversations should naturally relate to and build upon this theme.`,
+    );
+  }
+  if (storyContext) {
+    prompt.push(
+      `\nCURRENT STORY CONTEXT:\n${storyContext}\n\nUse this context to inform your conversation naturally.`,
+    );
+  }
+  
+  // Extract motivation from agent identity if available
+  const motivation = agent?.identity?.includes('motivation:') 
+    ? agent.identity.split('motivation:')[1]?.trim() 
+    : agent?.plan || '';
+  
+  if (motivation) {
+    prompt.push(
+      `\nYOUR MOTIVATION AS A PLOT DEVICE:\n${motivation}\n\nYou are a plot device in this story. Your conversations MUST drive the plot forward.`,
+    );
+  }
+  
   if (memoryWithOtherPlayer) {
     prompt.push(
       `Be sure to include some detail or question about a previous conversation in your greeting.`,
@@ -59,10 +108,10 @@ export async function startConversationMessage(
     messages: [
       {
         role: 'system',
-        content: prompt.join('\n') + '\n\nWrite exactly one short line. Maximum one sentence. Keep it simple and narrative - focus on what you\'re doing or thinking, not elaborate descriptions. Be creative and varied in your responses.',
+        content: prompt.join('\n') + '\n\nCRITICAL REQUIREMENTS:\n1. You are a plot device. Your conversations MUST drive the plot forward.\n2. DO NOT make small talk. Every word you say should advance the story.\n3. Examples: ❌ Small talk: "Hey, how are you?" or "Nice weather today" ✅ Plot-driving: "I found the evidence we need" or "The plan is ready"\n4. Speak in ACTIVE VOICE - say what you are doing, thinking, or feeling directly. DO NOT describe your actions in third person.\n5. Keep your response under 15 words. Maximum one sentence.\n\nExamples:\n❌ BAD: "I am walking over to you" or "I think we should talk" or "Hey, how are you doing?"\n✅ GOOD: "I found the key" or "The meeting is at midnight" or "We need to act now"\n\nWrite exactly one short line. Speak naturally and directly.',
       },
     ],
-    max_tokens: 60,
+    max_tokens: 40, // Reduced for 15-word limit
     temperature: 0.85,
     stop: stopWords(otherPlayer.name, player.name),
   });
@@ -99,21 +148,71 @@ export async function continueConversationMessage(
     `What do you think about ${otherPlayer.name}?`,
   );
   const memories = await memory.searchMemories(ctx, player.id as GameId<'players'>, embedding, 3);
+  
+  // Get story theme, context, and story draft
+  const plot = await ctx.runQuery(api.worldStory.getWorldPlot, {
+    worldId,
+  });
+  const initialTheme = plot?.initialPlot || '';
+  const storyContext = plot?.currentSummary || '';
+  
+  // Get story draft
+  const storyDraft = await ctx.runQuery(api.worldStory.getStoryDraftQuery, {
+    worldId,
+  });
+  
+  // Extract beginning of story draft (first 2-3 sentences)
+  let storyDraftBeginning = '';
+  if (storyDraft?.draftText) {
+    const sentences = storyDraft.draftText.split(/[.!?]+/).filter(s => s.trim().length > 0);
+    storyDraftBeginning = sentences.slice(0, 3).join('. ').trim() + '.';
+  }
+
   const prompt = [
     `You are ${player.name}, and you're currently in a conversation with ${otherPlayer.name}.`,
     `The conversation started at ${started.toLocaleString()}. It's now ${now.toLocaleString()}.`,
   ];
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
   prompt.push(...relatedMemoriesPrompt(memories));
+  
+  // Include story draft beginning
+  if (storyDraftBeginning) {
+    prompt.push(
+      `\nSTORY CONTEXT (Beginning of the story):\n${storyDraftBeginning}\n\nThis is how the story begins. Your conversations should drive the plot forward based on this context.`,
+    );
+  }
+  
+  if (initialTheme) {
+    prompt.push(
+      `\nSTORY THEME:\n${initialTheme}\n\nThis is the central theme of the story. Your conversations should naturally relate to and build upon this theme.`,
+    );
+  }
+  if (storyContext) {
+    prompt.push(
+      `\nCURRENT STORY CONTEXT:\n${storyContext}\n\nUse this context to inform your conversation naturally.`,
+    );
+  }
+  
+  // Extract motivation from agent identity if available
+  const motivation = agent?.identity?.includes('motivation:') 
+    ? agent.identity.split('motivation:')[1]?.trim() 
+    : agent?.plan || '';
+  
+  if (motivation) {
+    prompt.push(
+      `\nYOUR MOTIVATION AS A PLOT DEVICE:\n${motivation}\n\nYou are a plot device in this story. Your conversations MUST drive the plot forward.`,
+    );
+  }
+  
   prompt.push(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
-    `DO NOT greet them again. Do NOT use the word "Hey" too often. Write exactly one short line. Maximum one sentence. Keep it simple and narrative - focus on actions and thoughts, not elaborate descriptions. Be creative, varied, and show your personality through your responses.`,
+    `DO NOT greet them again. Do NOT use the word "Hey" too often.`,
   );
 
   const llmMessages: LLMMessage[] = [
     {
       role: 'system',
-      content: prompt.join('\n'),
+      content: prompt.join('\n') + '\n\nCRITICAL REQUIREMENTS:\n1. You are a plot device. Your conversations MUST drive the plot forward.\n2. DO NOT make small talk. Every word you say should advance the story.\n3. Examples: ❌ Small talk: "Hey, how are you?" or "Nice weather today" ✅ Plot-driving: "I found the evidence we need" or "The plan is ready"\n4. Speak in ACTIVE VOICE - say what you are doing, thinking, or feeling directly. DO NOT describe your actions in third person.\n5. Keep your response under 15 words. Maximum one sentence.\n\nExamples:\n❌ BAD: "I am walking over to you" or "I think we should talk" or "Hey, how are you doing?"\n✅ GOOD: "I found the key" or "The meeting is at midnight" or "We need to act now"\n\nWrite exactly one short line. Speak naturally and directly.',
     },
     ...(await previousMessages(
       ctx,
@@ -128,7 +227,7 @@ export async function continueConversationMessage(
 
   const { content } = await chatCompletion({
     messages: llmMessages,
-    max_tokens: 60,
+    max_tokens: 40, // Reduced for 15-word limit
     temperature: 0.85,
     stop: stopWords(otherPlayer.name, player.name),
   });
@@ -151,19 +250,68 @@ export async function leaveConversationMessage(
       conversationId,
     },
   );
+  // Get story theme, context, and story draft
+  const plot = await ctx.runQuery(api.worldStory.getWorldPlot, {
+    worldId,
+  });
+  const initialTheme = plot?.initialPlot || '';
+  const storyContext = plot?.currentSummary || '';
+  
+  // Get story draft
+  const storyDraft = await ctx.runQuery(api.worldStory.getStoryDraftQuery, {
+    worldId,
+  });
+  
+  // Extract beginning of story draft (first 2-3 sentences)
+  let storyDraftBeginning = '';
+  if (storyDraft?.draftText) {
+    const sentences = storyDraft.draftText.split(/[.!?]+/).filter(s => s.trim().length > 0);
+    storyDraftBeginning = sentences.slice(0, 3).join('. ').trim() + '.';
+  }
+
   const prompt = [
     `You are ${player.name}, and you're currently in a conversation with ${otherPlayer.name}.`,
-    `You've decided to leave the question and would like to politely tell them you're leaving the conversation.`,
+    `You've decided to leave and would like to politely tell them you're leaving the conversation.`,
   ];
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
+  
+  // Include story draft beginning
+  if (storyDraftBeginning) {
+    prompt.push(
+      `\nSTORY CONTEXT (Beginning of the story):\n${storyDraftBeginning}\n\nThis is how the story begins. Your conversations should drive the plot forward based on this context.`,
+    );
+  }
+  
+  if (initialTheme) {
+    prompt.push(
+      `\nSTORY THEME:\n${initialTheme}\n\nThis is the central theme of the story. Your conversations should naturally relate to and build upon this theme.`,
+    );
+  }
+  if (storyContext) {
+    prompt.push(
+      `\nCURRENT STORY CONTEXT:\n${storyContext}\n\nUse this context to inform your conversation naturally.`,
+    );
+  }
+  
+  // Extract motivation from agent identity if available
+  const motivation = agent?.identity?.includes('motivation:') 
+    ? agent.identity.split('motivation:')[1]?.trim() 
+    : agent?.plan || '';
+  
+  if (motivation) {
+    prompt.push(
+      `\nYOUR MOTIVATION AS A PLOT DEVICE:\n${motivation}\n\nYou are a plot device in this story. Your conversations MUST drive the plot forward.`,
+    );
+  }
+  
   prompt.push(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
-    `How would you like to tell them that you're leaving? Write exactly one short line. Maximum one sentence. Keep it simple and narrative - focus on your action, not elaborate descriptions.`,
+    `How would you like to tell them that you're leaving?`,
   );
   const llmMessages: LLMMessage[] = [
     {
       role: 'system',
-      content: prompt.join('\n'),
+      content: prompt.join('\n') + '\n\nCRITICAL REQUIREMENTS:\n1. You are a plot device. Your conversations MUST drive the plot forward.\n2. DO NOT make small talk. Even when leaving, make it plot-relevant if possible.\n3. Speak in ACTIVE VOICE - say what you are doing directly. DO NOT describe your actions in third person.\n4. Keep your response under 15 words. Maximum one sentence.\n\nExamples:\n❌ BAD: "I am leaving now" or "I need to go"\n✅ GOOD: "I gotta go, see you later" or "Talk to you soon" or "I found what we need, catch you later"\n\nWrite exactly one short line. Speak naturally and directly.',
     },
     ...(await previousMessages(
       ctx,
@@ -178,7 +326,7 @@ export async function leaveConversationMessage(
 
   const { content } = await chatCompletion({
     messages: llmMessages,
-    max_tokens: 60,
+    max_tokens: 40, // Reduced for 15-word limit
     temperature: 0.85,
     stop: stopWords(otherPlayer.name, player.name),
   });

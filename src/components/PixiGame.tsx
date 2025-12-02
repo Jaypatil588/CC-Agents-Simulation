@@ -23,6 +23,7 @@ export const PixiGame = (props: {
   width: number;
   height: number;
   setSelectedElement: SelectElement;
+  scrollable?: boolean;
 }) => {
   // PIXI setup.
   const pixiApp = useApp();
@@ -81,26 +82,33 @@ export const PixiGame = (props: {
   };
   const { width, height, tileDim } = props.game.worldMap;
   const players = [...props.game.world.players.values()];
+  const worldWidth = width * tileDim;
+  const worldHeight = height * tileDim;
+  
+  // Calculate scale to fit entire map to width (height will match aspect ratio)
+  const fitToScreenScale = props.width / worldWidth;
 
-  // Zoom on the user’s avatar when it is created
+  // Zoom on the user's avatar when it is created (only if scrollable)
   useEffect(() => {
-    if (!viewportRef.current || humanPlayerId === undefined) return;
+    if (!viewportRef.current || humanPlayerId === undefined || !props.scrollable) return;
 
     const humanPlayer = props.game.world.players.get(humanPlayerId)!;
     viewportRef.current.animate({
       position: new PIXI.Point(humanPlayer.position.x * tileDim, humanPlayer.position.y * tileDim),
       scale: 1.5,
     });
-  }, [humanPlayerId]);
+  }, [humanPlayerId, props.scrollable]);
 
   return (
     <PixiViewport
       app={pixiApp}
       screenWidth={props.width}
       screenHeight={props.height}
-      worldWidth={width * tileDim}
-      worldHeight={height * tileDim}
+      worldWidth={worldWidth}
+      worldHeight={worldHeight}
       viewportRef={viewportRef}
+      scrollable={props.scrollable ?? false}
+      initialScale={fitToScreenScale}
     >
       <PixiStaticMap
         map={props.game.worldMap}
@@ -123,6 +131,7 @@ export const PixiGame = (props: {
           isViewer={p.id === humanPlayerId}
           onClick={props.setSelectedElement}
           historicalTime={props.historicalTime}
+          worldId={props.worldId}
         />
       ))}
     </PixiViewport>

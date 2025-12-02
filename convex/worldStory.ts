@@ -92,19 +92,212 @@ export const createWorldPlot = internalMutation({
       lastStoryGenerationTime: undefined,
       storyProgress: 'beginning',
       lastSummaryTime: Date.now(),
-    });
+      totalDialogueCount: 0,
+    } as any);
     
     console.log(`[createWorldPlot] Plot inserted successfully with ID: ${plotId}`);
     return plotId;
   },
 });
 
-// Public mutation to trigger plot initialization (called from frontend)
-export const initializePlot = mutation({
+// Internal mutation to save story draft
+export const saveStoryDraft = internalMutation({
+  args: {
+    worldId: v.id('worlds'),
+    draftText: v.string(),
+    originalTheme: v.string(),
+    currentVersion: v.number(),
+  },
+  handler: async (ctx, args) => {
+    // Check if draft already exists
+    const existingDraft = await ctx.db
+      .query('storyDrafts')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .first();
+    
+    if (existingDraft) {
+      // Update existing draft
+      await ctx.db.patch(existingDraft._id, {
+        draftText: args.draftText,
+        currentVersion: args.currentVersion,
+        timestamp: Date.now(),
+      });
+      return existingDraft._id;
+    }
+    
+    // Create new draft
+    const draftId = await ctx.db.insert('storyDrafts', {
+      worldId: args.worldId,
+      draftText: args.draftText,
+      originalTheme: args.originalTheme,
+      currentVersion: args.currentVersion,
+      timestamp: Date.now(),
+    });
+    
+    return draftId;
+  },
+});
+
+// Internal query to get story draft
+export const getStoryDraft = internalQuery({
   args: {
     worldId: v.id('worlds'),
   },
   handler: async (ctx, args) => {
+    const draft = await ctx.db
+      .query('storyDrafts')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .first();
+    
+    return draft;
+  },
+});
+
+// Internal action to alter story draft based on conversations
+export const alterStoryDraft = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+    conversationText: v.string(), // Summary of recent conversations
+    characterNames: v.array(v.string()), // Characters involved
+  },
+  handler: async (ctx, args): Promise<string | null> => {
+    console.log(`[alterStoryDraft] Altering story draft for world ${args.worldId}`);
+    
+    // Get current story draft
+    const currentDraft: any = await ctx.runQuery(internal.worldStory.getStoryDraft, {
+      worldId: args.worldId,
+    });
+    
+    if (!currentDraft) {
+      console.log(`[alterStoryDraft] No story draft found, skipping`);
+      return null;
+    }
+    
+    try {
+      const { content }: { content: string } = await chatCompletion({
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a professional fiction writer who rewrites stories based on how character conversations have changed the plot. You maintain the story\'s beginning but update the middle and end to reflect how conversations have altered the narrative.',
+          },
+          {
+            role: 'user',
+            content: `Original Story Draft: ${currentDraft.draftText}
+
+Recent Conversations by ${args.characterNames.join(' and ')}:
+${args.conversationText}
+
+How have these conversations altered the story? Rewrite the story draft to reflect these changes, especially the future parts. Keep the beginning mostly the same (first 1-2 sentences), but update the middle and end based on how the plot has evolved through conversations.
+
+The new story draft should:
+- Maintain the original beginning (first 1-2 sentences)
+- Update the middle and end to reflect how conversations changed the plot
+- Be 200 words or less
+- Be a complete story from beginning to end
+- Show how the conversations influenced the narrative direction
+
+New Story Draft (200 words max):`,
+          },
+        ],
+        temperature: 0.8,
+        max_tokens: 500,
+      });
+      
+      const newDraftText: string = content.trim();
+      console.log(`[alterStoryDraft] Generated new draft (${newDraftText.length} characters)`);
+      
+      // Update the draft with new version
+      await ctx.runMutation(internal.worldStory.saveStoryDraft, {
+        worldId: args.worldId,
+        draftText: newDraftText,
+        originalTheme: currentDraft.originalTheme,
+        currentVersion: currentDraft.currentVersion + 1,
+      });
+      
+      return newDraftText;
+    } catch (error) {
+      console.error('[alterStoryDraft] Error altering story draft:', error);
+      throw error;
+    }
+  },
+});
+
+// Public query to get story draft
+export const getStoryDraftQuery = query({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args) => {
+    const draft = await ctx.db
+      .query('storyDrafts')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .first();
+    
+    return draft;
+  },
+});
+
+// Internal action to generate story draft from theme
+export const generateStoryDraft = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+    theme: v.string(),
+  },
+  handler: async (ctx, args) => {
+    console.log(`[generateStoryDraft] Generating story draft for world ${args.worldId}`);
+    
+    try {
+      const { content } = await chatCompletion({
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a professional fiction writer. Write complete, engaging stories from beginning to end.',
+          },
+          {
+            role: 'user',
+            content: `Write a complete story from beginning to end (200 words maximum) based on this theme: ${args.theme}
+
+The story should:
+- Have a clear beginning, middle, and end
+- Be engaging and dramatic
+- Fit within 200 words
+- Be suitable for a creative storytelling game where characters will act as plot devices
+
+Story:`,
+          },
+        ],
+        temperature: 0.8,
+        max_tokens: 500,
+      });
+      
+      const draftText = content.trim();
+      console.log(`[generateStoryDraft] Generated draft (${draftText.length} characters)`);
+      
+      // Save the draft
+      await ctx.runMutation(internal.worldStory.saveStoryDraft, {
+        worldId: args.worldId,
+        draftText: draftText,
+        originalTheme: args.theme,
+        currentVersion: 1,
+      });
+      
+      return draftText;
+    } catch (error) {
+      console.error('[generateStoryDraft] Error generating story draft:', error);
+      throw error;
+    }
+  },
+});
+
+// Public mutation to set initial plot/theme from user input
+export const setInitialPlot = mutation({
+  args: {
+    worldId: v.id('worlds'),
+    initialPlot: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; plotId?: Id<'worldPlot'>; message?: string }> => {
+    console.log(`[setInitialPlot] Setting initial plot for world ${args.worldId}`);
+    
     // Check if plot already exists
     const existingPlot = await ctx.db
       .query('worldPlot')
@@ -112,15 +305,53 @@ export const initializePlot = mutation({
       .first();
     
     if (existingPlot) {
-      return existingPlot;
+      console.log(`[setInitialPlot] Plot already exists, skipping`);
+      return { success: false, message: 'Plot already exists' };
     }
-
-    // Schedule internal initialization
-    await ctx.scheduler.runAfter(0, internal.worldStory.initializeWorldPlot, {
+    
+    // Create the plot with user-provided theme
+    const plotId: Id<'worldPlot'> = await ctx.runMutation(internal.worldStory.createWorldPlot, {
+      worldId: args.worldId,
+      initialPlot: args.initialPlot.trim(),
+      currentSummary: args.initialPlot.trim(),
+    });
+    
+    console.log(`[setInitialPlot] Plot created successfully with ID: ${plotId}`);
+    
+    // Trigger story draft generation
+    await ctx.scheduler.runAfter(0, internal.worldStory.generateStoryDraft, {
+      worldId: args.worldId,
+      theme: args.initialPlot.trim(),
+    });
+    
+    // After story draft is generated, trigger agent generation
+    // We'll do this in a separate action that checks for draft existence
+    await ctx.scheduler.runAfter(5, internal.characterGeneration.generateAgentsFromStory, {
       worldId: args.worldId,
     });
+    
+    return { success: true, plotId };
+  },
+});
 
-    return null;
+// Legacy mutation (kept for compatibility, but no longer auto-generates)
+export const initializePlot = mutation({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args) => {
+    console.log(`[initializePlot] Called for world ${args.worldId} - no longer auto-generates`);
+    // Just check if plot exists, don't auto-generate
+    const existingPlot = await ctx.db
+      .query('worldPlot')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .first();
+    
+    if (existingPlot) {
+      return { success: true, plotId: existingPlot._id };
+    }
+    
+    return { success: false, message: 'No plot exists - user must provide initial theme' };
   },
 });
 
@@ -294,13 +525,13 @@ export const cleanupDuplicatePlots = mutation({
   },
 });
 
-// Initialize a world plot with an epic DnD story (internal action)
+// Initialize a world plot - now waits for user input (no auto-generation)
 export const initializeWorldPlot = internalAction({
   args: {
     worldId: v.id('worlds'),
   },
   handler: async (ctx, args) => {
-    console.log(`[initializeWorldPlot] Starting for world ${args.worldId}`);
+    console.log(`[initializeWorldPlot] Checking for existing plot for world ${args.worldId}`);
     
     // Check if plot already exists
     const existingPlot: any = await ctx.runQuery(api.worldStory.getWorldPlot, {
@@ -312,57 +543,9 @@ export const initializeWorldPlot = internalAction({
       return existingPlot;
     }
 
-    console.log(`[initializeWorldPlot] No existing plot, generating new one...`);
-
-    // Get character descriptions to incorporate into the plot
-    const characters: any = await ctx.runQuery(api.worldStory.getCharacters, {
-      worldId: args.worldId,
-    });
-    
-    const characterList = characters.map((c: any) => `${c.name}: ${c.description}`).join('\n');
-
-    try {
-      console.log(`[initializeWorldPlot] Calling LLM to generate plot...`);
-      const { content } = await chatCompletion({
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction writing - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose, not promoting real-world harm. Create dramatic plot with conflict, stakes, mystery.',
-          },
-          {
-            role: 'user',
-            content: `Create fictional D&D adventure plot for a storytelling game. Characters: ${characterList}. Write 3-4 paragraphs establishing world, central conflict, atmosphere.`,
-          },
-        ],
-        temperature: 0.9,
-        max_tokens: 100,
-      });
-
-      console.log(`[initializeWorldPlot] LLM response received, saving plot...`);
-      console.log(`[initializeWorldPlot] Plot content: ${content.substring(0, 100)}...`);
-
-      await ctx.runMutation(internal.worldStory.createWorldPlot, {
-        worldId: args.worldId,
-        initialPlot: content.trim(),
-        currentSummary: content.trim(),
-      });
-
-      console.log(`[initializeWorldPlot] Plot saved successfully!`);
-      return { success: true, plot: content.trim() };
-    } catch (error) {
-      console.error('[initializeWorldPlot] Failed to generate initial plot:', error);
-      // Create a default plot if LLM fails
-      const defaultPlot = `In a realm of magic and mystery, ancient forces stir. Dark omens have been reported across the land, and the inhabitants sense that great changes are coming. Alliances will be tested, secrets will be revealed, and heroes will rise to face the challenges ahead. The fate of the realm hangs in the balance.`;
-      
-      console.log(`[initializeWorldPlot] Using default plot due to error`);
-      await ctx.runMutation(internal.worldStory.createWorldPlot, {
-        worldId: args.worldId,
-        initialPlot: defaultPlot,
-        currentSummary: defaultPlot,
-      });
-
-      return { success: true, plot: defaultPlot };
-    }
+    // No plot exists - wait for user to provide initial theme/plot via UI
+    console.log(`[initializeWorldPlot] No plot exists - waiting for user to provide initial theme/plot`);
+    return null;
   },
 });
 
@@ -385,6 +568,7 @@ export const generateConversationEmojisAction = internalAction({
 export const shouldTriggerStoryGeneration = internalQuery({
   args: {
     worldId: v.id('worlds'),
+    prioritizeHuman: v.optional(v.boolean()), // Flag to prioritize human player conversations
   },
   handler: async (ctx, args) => {
     const plot = await ctx.db
@@ -396,42 +580,70 @@ export const shouldTriggerStoryGeneration = internalQuery({
       return { shouldTrigger: false, reason: 'No plot found' };
     }
 
-    // Check cooldown
-    const now = Date.now();
-    const lastGeneration = plot.lastStoryGenerationTime || 0;
-    if (now - lastGeneration < STORY_GENERATION_COOLDOWN) {
-      return {
-        shouldTrigger: false,
-        reason: `Cooldown active (${Math.round((STORY_GENERATION_COOLDOWN - (now - lastGeneration)) / 1000)}s remaining)`,
-      };
-    }
-
     // Get conversation stacks
     const stacks: Record<string, any[]> = plot.conversationStacks || {};
     const processedIds = new Set(plot.processedMessageIds || []);
 
-    // Collect all unprocessed messages
-    const allUnprocessedMessages: any[] = [];
-    for (const [playerId, messages] of Object.entries(stacks)) {
-      for (const msg of messages) {
-        const msgIdStr = typeof msg.messageId === 'string' ? msg.messageId : msg.messageId.toString();
-        if (!processedIds.has(msgIdStr)) {
-          allUnprocessedMessages.push(msg);
+    // Get world to check which players are human
+    const world = await ctx.db.get(args.worldId);
+    const humanPlayerIds = new Set<string>();
+    if (world && world.players) {
+      for (const player of world.players) {
+        if (player.human) {
+          humanPlayerIds.add(player.id);
         }
       }
     }
 
+    // Collect all unprocessed messages, marking which are from human players
+    const allUnprocessedMessages: any[] = [];
+    const humanMessages: any[] = [];
+    for (const [playerId, messages] of Object.entries(stacks)) {
+      const isHuman = humanPlayerIds.has(playerId);
+      for (const msg of messages) {
+        const msgIdStr = typeof msg.messageId === 'string' ? msg.messageId : msg.messageId.toString();
+        if (!processedIds.has(msgIdStr)) {
+          allUnprocessedMessages.push(msg);
+          if (isHuman) {
+            humanMessages.push(msg);
+          }
+        }
+      }
+    }
+
+    // For human player conversations, use lower thresholds and bypass cooldown
+    const hasHumanMessages = humanMessages.length > 0;
+    const isHumanPriority = args.prioritizeHuman || hasHumanMessages;
+
+    // Check cooldown (bypass for human conversations)
+    if (!isHumanPriority) {
+      const now = Date.now();
+      const lastGeneration = plot.lastStoryGenerationTime || 0;
+      if (now - lastGeneration < STORY_GENERATION_COOLDOWN) {
+        return {
+          shouldTrigger: false,
+          reason: `Cooldown active (${Math.round((STORY_GENERATION_COOLDOWN - (now - lastGeneration)) / 1000)}s remaining)`,
+        };
+      }
+    }
+
+    // Use lower threshold for human conversations
+    const minMessages = isHumanPriority ? 1 : MIN_MESSAGES_FOR_STORY;
+    const minMessagesPerConversation = isHumanPriority ? 1 : MIN_MESSAGES_IN_CONVERSATION;
+
     // Check if we have enough new messages
-    if (allUnprocessedMessages.length < MIN_MESSAGES_FOR_STORY) {
+    const messageCount = isHumanPriority && hasHumanMessages ? humanMessages.length : allUnprocessedMessages.length;
+    if (messageCount < minMessages) {
       return {
         shouldTrigger: false,
-        reason: `Not enough new messages (${allUnprocessedMessages.length}/${MIN_MESSAGES_FOR_STORY})`,
+        reason: `Not enough new messages (${messageCount}/${minMessages})${isHumanPriority ? ' [human priority]' : ''}`,
       };
     }
 
     // Group by conversation and check for meaningful conversations
+    const messagesToCheck = isHumanPriority && hasHumanMessages ? humanMessages : allUnprocessedMessages;
     const conversationGroups = new Map<string, any[]>();
-    for (const msg of allUnprocessedMessages) {
+    for (const msg of messagesToCheck) {
       const convId = msg.conversationId?.toString() || 'unknown';
       if (!conversationGroups.has(convId)) {
         conversationGroups.set(convId, []);
@@ -439,15 +651,15 @@ export const shouldTriggerStoryGeneration = internalQuery({
       conversationGroups.get(convId)!.push(msg);
     }
 
-    // Check if we have at least one meaningful conversation (2+ messages)
+    // Check if we have at least one meaningful conversation
     const meaningfulConversations = Array.from(conversationGroups.values()).filter(
-      (msgs) => msgs.length >= MIN_MESSAGES_IN_CONVERSATION,
+      (msgs) => msgs.length >= minMessagesPerConversation,
     );
 
     if (meaningfulConversations.length === 0) {
       return {
         shouldTrigger: false,
-        reason: 'No meaningful conversations (need 2+ messages per conversation)',
+        reason: `No meaningful conversations (need ${minMessagesPerConversation}+ messages per conversation)${isHumanPriority ? ' [human priority]' : ''}`,
       };
     }
 
@@ -455,6 +667,7 @@ export const shouldTriggerStoryGeneration = internalQuery({
       shouldTrigger: true,
       unprocessedMessageCount: allUnprocessedMessages.length,
       meaningfulConversationCount: meaningfulConversations.length,
+      isHumanPriority,
     };
   },
 });
@@ -502,6 +715,22 @@ export const pushToConversationStackMutation = internalMutation({
   },
 });
 
+// Helper query to check if a player is human
+export const isPlayerHuman = internalQuery({
+  args: {
+    worldId: v.id('worlds'),
+    playerId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const world = await ctx.db.get(args.worldId);
+    if (!world || !world.players) {
+      return false;
+    }
+    const player = world.players.find((p: any) => p.id === args.playerId);
+    return !!player?.human;
+  },
+});
+
 // Action wrapper to call the mutation
 export const pushToConversationStack = internalAction({
   args: {
@@ -514,6 +743,12 @@ export const pushToConversationStack = internalAction({
     timestamp: v.number(),
   },
   handler: async (ctx, args) => {
+    // Check if this is a human player
+    const isHuman = await ctx.runQuery(internal.worldStory.isPlayerHuman, {
+      worldId: args.worldId,
+      playerId: args.playerId,
+    });
+
     // Push message to stack
     await ctx.runMutation(internal.worldStory.pushToConversationStackMutation, {
       worldId: args.worldId,
@@ -526,16 +761,20 @@ export const pushToConversationStack = internalAction({
     });
 
     // Check if we should trigger story generation (event-driven)
+    // Pass isHuman flag to prioritize human conversations
     const triggerCheck = await ctx.runQuery(internal.worldStory.shouldTriggerStoryGeneration, {
       worldId: args.worldId,
+      prioritizeHuman: isHuman,
     });
 
     if (triggerCheck.shouldTrigger) {
       console.log(
-        `[pushToConversationStack] Triggering story generation: ${triggerCheck.unprocessedMessageCount} new messages, ${triggerCheck.meaningfulConversationCount} meaningful conversations`,
+        `[pushToConversationStack] ${isHuman ? '🎮 HUMAN PLAYER' : '🤖 AI'} - Triggering story generation: ${triggerCheck.unprocessedMessageCount} new messages, ${triggerCheck.meaningfulConversationCount} meaningful conversations`,
       );
-      // Schedule story generation (with small delay to batch multiple messages)
-      await ctx.scheduler.runAfter(2000, internal.worldStory.generateNarrative, {
+      // For human players, trigger immediately (or with minimal delay)
+      // For AI players, use normal delay to batch messages
+      const delay = isHuman ? 500 : 2000;
+      await ctx.scheduler.runAfter(delay, internal.worldStory.generateNarrative, {
         worldId: args.worldId,
       });
     }
@@ -587,10 +826,12 @@ export const getNarrativeData = query({
     }
 
     // Create conversation summaries (one-line per conversation)
+    // Include full dialogue text so story generation can interpret active voice
     const conversationSummaries = Array.from(conversationGroups.values()).map((msgs: any[]) => {
       const participants = [...new Set(msgs.map((m: any) => m.authorName))].join(' & ');
-      const keyPoints = msgs.slice(-3).map((m: any) => m.text).join('; ');
-      return `${participants}: ${keyPoints}`;
+      // Include more messages to capture full dialogue context for interpretation
+      const dialogueText = msgs.map((m: any) => `${m.authorName}: "${m.text}"`).join(' ');
+      return `${participants} - ${dialogueText}`;
     });
 
     // Convert stack messages to messagesWithAuthors format
@@ -636,6 +877,7 @@ export const saveNarrative = internalMutation({
     characterNames: v.array(v.string()),
     lastProcessedTime: v.number(),
     processedMessageIds: v.array(v.string()), // Message IDs that were used for this story
+    conversationIds: v.optional(v.array(v.string())), // Conversation IDs to count unique dialogues
   },
   handler: async (ctx, args) => {
     await ctx.db.insert('worldStory', {
@@ -659,21 +901,232 @@ export const saveNarrative = internalMutation({
         existingProcessedIds.add(msgId);
       }
       
+      // Count unique dialogues (conversations) from this batch
+      const uniqueConversations = new Set(args.conversationIds || []);
+      const dialogueCount = uniqueConversations.size;
+      const currentDialogueCount = (plot as any).totalDialogueCount || 0;
+      const newDialogueCount = currentDialogueCount + dialogueCount;
+      
       // Update tracking: processed message IDs, last processed time, last generation time
       const now = Date.now();
       await ctx.db.patch(plot._id, {
         lastProcessedMessageTime: args.lastProcessedTime,
         processedMessageIds: Array.from(existingProcessedIds) as string[],
         lastStoryGenerationTime: now,
+        totalDialogueCount: newDialogueCount,
         // Clear conversation stacks after processing (they've been used)
         conversationStacks: {},
+      } as any);
+      
+      // Extract theme mutation if conversation text is provided
+      if (args.conversationIds && args.conversationIds.length > 0 && args.characterNames.length > 0) {
+        // Get conversation text from messages (we'll pass it from generateNarrative)
+        // Trigger theme mutation extraction (async, don't wait)
+        const conversationText = `Conversation between ${args.characterNames.join(' and ')}: ${args.sourceMessages.length} messages`;
+        ctx.scheduler.runAfter(0, internal.worldStory.extractAndSaveThemeMutation, {
+          worldId: args.worldId,
+          conversationText: conversationText,
+          characterNames: args.characterNames,
+          sourceMessageIds: args.sourceMessages,
+          conversationId: args.conversationIds[0], // Use first conversation ID
+        });
+      }
+      
+      // Check if we've hit 10 dialogues threshold
+      const shouldGeneratePlotSummary = newDialogueCount >= 10 && (newDialogueCount % 10 === 0 || newDialogueCount === 10);
+      
+      if (shouldGeneratePlotSummary) {
+        console.log(`[saveNarrative] Reached ${newDialogueCount} dialogues, triggering plot summary generation with unprocessed messages`);
+        // Trigger plot summary generation with unprocessed messages context
+        await ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummaryWithUnprocessed, {
+          worldId: args.worldId,
+        });
+      } else {
+        // Regular plot summary update (without unprocessed messages)
+        await ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummary, {
+          worldId: args.worldId,
+        });
+      }
+    }
+  },
+});
+
+// Internal action to extract theme mutation from conversations
+export const extractThemeMutation = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+    conversationText: v.string(),
+    characterNames: v.array(v.string()),
+    sourceMessageIds: v.array(v.id('messages')),
+    conversationId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const plot: any = await ctx.runQuery(api.worldStory.getWorldPlot, {
+      worldId: args.worldId,
+    });
+    
+    if (!plot) {
+      return null;
+    }
+    
+    const previousTheme = plot.evolvedTheme || plot.initialPlot;
+    
+    try {
+      const { content } = await chatCompletion({
+        messages: [
+          {
+            role: 'system',
+            content: 'You analyze how character conversations mutate and evolve a story theme. Given the original theme and new conversations, identify how the theme has evolved. Be specific about what changed and why.',
+          },
+          {
+            role: 'user',
+            content: `Original Theme: ${plot.initialPlot}
+
+Previous Evolved Theme: ${previousTheme}
+
+New Conversations by ${args.characterNames.join(' and ')}:
+${args.conversationText}
+
+Analyze how this conversation mutates the theme. Provide:
+1. The new evolved theme (how the theme has changed)
+2. A brief description of the mutation (what changed and why)
+
+Format as JSON: {"newTheme": "...", "mutationDescription": "..."}`,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 300,
       });
       
-      // Trigger plot summary generation (event-driven, after story is saved)
-      await ctx.scheduler.runAfter(0, internal.worldStory.generatePlotSummary, {
+      // Parse JSON response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const mutation = JSON.parse(jsonMatch[0]);
+        return mutation;
+      }
+    } catch (error) {
+      console.error('[extractThemeMutation] Error:', error);
+    }
+    
+    return null;
+  },
+});
+
+// Internal action to extract and save theme mutation
+export const extractAndSaveThemeMutation = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+    conversationText: v.string(),
+    characterNames: v.array(v.string()),
+    sourceMessageIds: v.array(v.id('messages')),
+    conversationId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const mutation = await ctx.runAction(internal.worldStory.extractThemeMutation, {
+      worldId: args.worldId,
+      conversationText: args.conversationText,
+      characterNames: args.characterNames,
+      sourceMessageIds: args.sourceMessageIds,
+      conversationId: args.conversationId,
+    });
+    
+    if (!mutation) {
+      return;
+    }
+    
+    // Get current mutation count
+    const existingMutations = await ctx.runQuery(api.worldStory.getThemeMutations, {
+      worldId: args.worldId,
+    });
+    const mutationIndex = existingMutations.length;
+    
+    // Get previous theme
+    const plot: any = await ctx.runQuery(api.worldStory.getWorldPlot, {
+      worldId: args.worldId,
+    });
+    const previousTheme = plot?.evolvedTheme || plot?.initialPlot || '';
+    
+    // Save mutation
+    await ctx.runMutation(internal.worldStory.saveThemeMutation, {
+      worldId: args.worldId,
+      mutationIndex: mutationIndex,
+      previousTheme: previousTheme,
+      newTheme: mutation.newTheme || previousTheme,
+      mutationDescription: mutation.mutationDescription || 'Theme evolved through character interactions',
+      sourceConversationId: args.conversationId,
+      sourceMessageIds: args.sourceMessageIds,
+      characterNames: args.characterNames,
+    });
+    
+    // Update plot with evolved theme
+    if (plot) {
+      await ctx.runMutation(internal.worldStory.updateEvolvedTheme, {
         worldId: args.worldId,
+        evolvedTheme: mutation.newTheme || previousTheme,
       });
     }
+  },
+});
+
+// Internal mutation to save theme mutation
+export const saveThemeMutation = internalMutation({
+  args: {
+    worldId: v.id('worlds'),
+    mutationIndex: v.number(),
+    previousTheme: v.string(),
+    newTheme: v.string(),
+    mutationDescription: v.string(),
+    sourceConversationId: v.string(),
+    sourceMessageIds: v.array(v.id('messages')),
+    characterNames: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert('themeMutations' as any, {
+      worldId: args.worldId,
+      mutationIndex: args.mutationIndex,
+      previousTheme: args.previousTheme,
+      newTheme: args.newTheme,
+      mutationDescription: args.mutationDescription,
+      sourceConversationId: args.sourceConversationId,
+      sourceMessageIds: args.sourceMessageIds,
+      characterNames: args.characterNames,
+      timestamp: Date.now(),
+    });
+  },
+});
+
+// Internal mutation to update evolved theme
+export const updateEvolvedTheme = internalMutation({
+  args: {
+    worldId: v.id('worlds'),
+    evolvedTheme: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const plot = await ctx.db
+      .query('worldPlot')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .first();
+    
+    if (plot) {
+      await ctx.db.patch(plot._id, {
+        evolvedTheme: args.evolvedTheme,
+      } as any);
+    }
+  },
+});
+
+// Query to get theme mutations
+export const getThemeMutations = query({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args) => {
+    const mutations = await ctx.db
+      .query('themeMutations' as any)
+      .withIndex('worldId' as any, (q: any) => q.eq('worldId', args.worldId))
+      .collect();
+    
+    return (mutations as any[]).sort((a: any, b: any) => a.mutationIndex - b.mutationIndex);
   },
 });
 
@@ -812,6 +1265,16 @@ export const generateNarrative = internalAction({
     // recentNarratives is already a string of recent stories joined
     const previousParagraphs = recentNarratives || 'Beginning of the story...';
     
+    // Get theme evolution context
+    const evolvedTheme = (plot as any).evolvedTheme || plot.initialPlot;
+    const themeMutations = await ctx.runQuery(api.worldStory.getThemeMutations, {
+      worldId: args.worldId,
+    });
+    const recentMutations = themeMutations.slice(-3); // Get last 3 mutations
+    const mutationContext = recentMutations.length > 0 
+      ? `\nTHEME EVOLUTION:\nThe theme has evolved from "${plot.initialPlot}" to "${evolvedTheme}" through ${themeMutations.length} mutations by independent characters.\nRecent mutations:\n${recentMutations.map((m: any) => `- ${m.characterNames.join(' and ')}: ${m.mutationDescription}`).join('\n')}`
+      : `\nSTORY THEME:\n${plot.initialPlot}`;
+
     const prompt: any = `You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction writing - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose, not promoting real-world harm.
 
 Passage ${nextPassageNumber}/${MAX_PASSAGES}. ${phaseInstructions}
@@ -819,18 +1282,26 @@ Passage ${nextPassageNumber}/${MAX_PASSAGES}. ${phaseInstructions}
 WHAT ALREADY HAPPENED:
 ${previousParagraphs}
 
+${mutationContext}
+
 CURRENT SITUATION:
-Plot: ${plot.currentSummary}
-New Conversations: ${conversationText}
+Plot Summary: ${plot.currentSummary}
+
+CHARACTER DIALOGUES (Active Voice - interpret what they're saying):
+${conversationText}
 
 CRITICAL REQUIREMENTS:
-- Write something NEW that ADVANCES the plot meaningfully
+- INTERPRET the active voice dialogues above - these are what characters are actually saying/doing
+- Characters are INDEPENDENT characters whose conversations directly shape the story theme
+- The theme has evolved through their interactions - show how their dialogues continue this evolution
+- Transform their dialogues into narrative prose that advances the story and reflects theme evolution
+- Write something NEW that ADVANCES the plot meaningfully based on what the characters are saying
 - Do NOT repeat similar themes, locations, or situations from what already happened
-- Introduce a NEW development, twist, discovery, or progression
+- Introduce a NEW development, twist, discovery, or progression based on the dialogues
 - Each paragraph must move the story forward - avoid repetitive descriptions
 - If previous paragraphs mentioned a location/artifact/conflict, advance it or introduce something NEW
 
-Write exactly one dramatic sentence representing a NEW development:`;
+Write exactly one dramatic sentence representing a NEW development based on interpreting the character dialogues and theme evolution:`;
     
     try {
       const { content }: any = await chatCompletion({
@@ -839,7 +1310,7 @@ Write exactly one dramatic sentence representing a NEW development:`;
             role: 'system',
             content: isFinalPassage 
               ? 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. Final passage - conclude the story in a single dramatic sentence resolving the conflict.'
-              : 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. CRITICAL: Write exactly one dramatic sentence that represents a NEW development. Do NOT repeat themes, locations, or situations from previous paragraphs. Each sentence must advance the plot meaningfully.',
+              : 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose.\n\nCRITICAL: The character dialogues you see are in ACTIVE VOICE (what characters are actually saying). Your job is to INTERPRET these active voice dialogues and transform them into narrative prose that advances the story. Write exactly one dramatic sentence that represents a NEW development based on interpreting what the characters are saying. Do NOT repeat themes, locations, or situations from previous paragraphs. Each sentence must advance the plot meaningfully.',
           },
           {
             role: 'user',
@@ -859,6 +1330,11 @@ Write exactly one dramatic sentence representing a NEW development:`;
         return typeof msgId === 'string' ? msgId : msgId.toString();
       });
       
+      // Extract unique conversation IDs to count dialogues
+      const conversationIds = Array.from(new Set(
+        messagesWithAuthors.map((m: any) => m.conversationId?.toString() || 'unknown').filter((id: string) => id !== 'unknown')
+      )) as string[];
+      
       // Generate emojis for conversations and set as player activities (separate event-driven process)
       // Schedule separately - don't block story generation
       await ctx.scheduler.runAfter(0, internal.worldStory.generateConversationEmojisAction, {
@@ -866,6 +1342,9 @@ Write exactly one dramatic sentence representing a NEW development:`;
         conversationSummaries,
         characterNames,
       });
+      
+      // Get full conversation text for theme mutation
+      const fullConversationText = conversationSummaries.join('\n');
       
       // Save the narrative
       await ctx.runMutation(internal.worldStory.saveNarrative, {
@@ -876,7 +1355,26 @@ Write exactly one dramatic sentence representing a NEW development:`;
         characterNames: characterNames as string[],
         lastProcessedTime: Math.max(...messagesWithAuthors.map((m: any) => m.timestamp)),
         processedMessageIds: processedMessageIds,
+        conversationIds: conversationIds,
       });
+      
+      // Trigger theme mutation extraction with full conversation text
+      if (conversationIds.length > 0 && characterNames.length > 0) {
+        await ctx.scheduler.runAfter(0, internal.worldStory.extractAndSaveThemeMutation, {
+          worldId: args.worldId,
+          conversationText: fullConversationText,
+          characterNames: characterNames as string[],
+          sourceMessageIds: messagesWithAuthors.map((m: any) => m.id),
+          conversationId: conversationIds[0],
+        });
+        
+        // Trigger story draft alteration after meaningful conversations
+        await ctx.scheduler.runAfter(2, internal.worldStory.alterStoryDraft, {
+          worldId: args.worldId,
+          conversationText: fullConversationText,
+          characterNames: characterNames as string[],
+        });
+      }
       
       // If this is the final passage, generate and save a final summary
       if (isFinalPassage) {
@@ -1034,6 +1532,129 @@ Write a concise summary reflecting what's currently going on (MAXIMUM 100 TOKENS
       };
     } catch (error) {
       console.error('Failed to generate plot summary:', error);
+      return null;
+    }
+  },
+});
+
+// Generate plot summary with unprocessed messages context (called every 10 dialogues)
+export const generatePlotSummaryWithUnprocessed = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+  },
+  handler: async (ctx, args) => {
+    // Get plot summary data
+    const data: any = await ctx.runQuery(api.worldStory.getPlotSummaryData, {
+      worldId: args.worldId,
+    });
+    
+    if (!data) {
+      return null;
+    }
+
+    const { plot, recentStories, storyCount }: any = data;
+
+    // Get unprocessed messages from conversation stacks
+    const stacks: Record<string, any[]> = plot.conversationStacks || {};
+    const processedIds = new Set(plot.processedMessageIds || []);
+    
+    // Collect all unprocessed messages
+    const unprocessedMessages: any[] = [];
+    for (const [playerId, messages] of Object.entries(stacks)) {
+      for (const msg of messages) {
+        const msgIdStr = typeof msg.messageId === 'string' ? msg.messageId : msg.messageId.toString();
+        if (!processedIds.has(msgIdStr)) {
+          unprocessedMessages.push(msg);
+        }
+      }
+    }
+
+    // Group unprocessed messages by conversation
+    const unprocessedConversations = new Map<string, any[]>();
+    for (const msg of unprocessedMessages) {
+      const convId = msg.conversationId?.toString() || 'unknown';
+      if (!unprocessedConversations.has(convId)) {
+        unprocessedConversations.set(convId, []);
+      }
+      unprocessedConversations.get(convId)!.push(msg);
+    }
+
+    // Create summary of unprocessed conversations
+    const unprocessedSummary = Array.from(unprocessedConversations.values())
+      .map((msgs: any[]) => {
+        const participants = [...new Set(msgs.map((m: any) => m.authorName))].join(' & ');
+        const keyPoints = msgs.slice(-3).map((m: any) => m.text).join('; ');
+        return `${participants}: ${keyPoints}`;
+      })
+      .join('\n');
+
+    const storyText = recentStories
+      .reverse()
+      .map((s: any) => s.narrative)
+      .join(' ');
+
+    try {
+      const { content } = await chatCompletion({
+        messages: [
+          {
+            role: 'system',
+            content: 'You are summarizing fictional story events to guide future story generation. IMPORTANT: You have a MAXIMUM of 150 TOKENS. Write a comprehensive summary that includes both what has happened AND what is currently happening (unprocessed conversations). This summary will be used to guide the LLM for next story steps. Keep it focused and actionable. Write 2-4 sentences maximum. No prefix text.',
+          },
+          {
+            role: 'user',
+            content: `Original Plot: ${plot.initialPlot}
+
+Story So Far:
+${storyText}
+
+Current Unprocessed Conversations (what's happening now):
+${unprocessedSummary || 'No new conversations yet'}
+
+Write a comprehensive summary that includes the story so far AND current developments to guide next story steps (MAXIMUM 150 TOKENS):`,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 150,
+      });
+
+      // Clean up summary - remove any prefix text
+      let cleanSummary = content.trim();
+      const prefixes = [
+        'Here is a simple summary of the story:',
+        'Here is the summary:',
+        'Summary:',
+        'Here\'s the summary:',
+        'Simple summary:',
+        'Comprehensive summary:',
+      ];
+      for (const prefix of prefixes) {
+        if (cleanSummary.toLowerCase().startsWith(prefix.toLowerCase())) {
+          cleanSummary = cleanSummary.substring(prefix.length).trim();
+        }
+      }
+      // Take first 2-3 lines max
+      const lines = cleanSummary.split('\n').filter(l => l.trim().length > 0);
+      cleanSummary = lines.slice(0, 3).join(' ').trim();
+
+      // Determine story progress
+      const storyProgress = determineStoryProgress(storyCount);
+
+      // Update the plot summary
+      await ctx.runMutation(internal.worldStory.updatePlotSummary, {
+        worldId: args.worldId,
+        currentSummary: cleanSummary,
+        storyProgress: storyProgress,
+      });
+
+      console.log(`[generatePlotSummaryWithUnprocessed] Updated plot summary with ${unprocessedMessages.length} unprocessed messages from ${unprocessedConversations.size} conversations`);
+
+      return {
+        summary: cleanSummary,
+        storyProgress: storyProgress,
+        unprocessedMessageCount: unprocessedMessages.length,
+      };
+    } catch (error) {
+      console.error('Failed to generate plot summary with unprocessed messages:', error);
       return null;
     }
   },

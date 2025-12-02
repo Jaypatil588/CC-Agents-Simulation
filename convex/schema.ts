@@ -33,7 +33,7 @@ export default defineSchema({
 
   worldPlot: defineTable({
     worldId: v.id('worlds'),
-    initialPlot: v.string(), // The original epic DnD plot generated on startup
+    initialPlot: v.string(), // The user-provided initial theme/plot
     currentSummary: v.string(), // Latest plot summary (updated after each story)
     lastProcessedMessageTime: v.number(), // Track which messages we've processed (by timestamp)
     processedMessageIds: v.optional(v.array(v.string())), // Track which message IDs have been processed for story generation
@@ -43,6 +43,30 @@ export default defineSchema({
     finalSummary: v.optional(v.string()), // Final 3-line summary when story completes (passage 20)
     isComplete: v.optional(v.boolean()), // Whether the story has reached passage 20
     conversationStacks: v.optional(v.any()), // Map of playerId -> array of conversation messages (stack)
+    totalDialogueCount: v.optional(v.number()), // Total number of dialogues (conversations) processed
+    evolvedTheme: v.optional(v.string()), // Current evolved theme based on mutations
+  })
+    .index('worldId', ['worldId']),
+
+  themeMutations: defineTable({
+    worldId: v.id('worlds'),
+    mutationIndex: v.number(), // Sequential index of mutations
+    previousTheme: v.string(), // Theme before this mutation
+    newTheme: v.string(), // Theme after this mutation
+    mutationDescription: v.string(), // Description of how the theme changed
+    sourceConversationId: v.string(), // Conversation that triggered this mutation
+    sourceMessageIds: v.array(v.id('messages')), // Messages that contributed to this mutation
+    characterNames: v.array(v.string()), // Names of agents involved
+    timestamp: v.number(), // When this mutation occurred
+  })
+    .index('worldId', ['worldId', 'mutationIndex']),
+
+  storyDrafts: defineTable({
+    worldId: v.id('worlds'),
+    draftText: v.string(), // The full story draft (200 words or less)
+    originalTheme: v.string(), // The user's original theme
+    currentVersion: v.number(), // Version number (increments as story is altered)
+    timestamp: v.number(),
   })
     .index('worldId', ['worldId']),
 

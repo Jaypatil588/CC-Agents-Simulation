@@ -52,10 +52,10 @@ export const TRAITS = [
   'Heroic (Brave)', 'Craven (Cowardly)', 'Fearless', 'Phobic',
 ];
 
-// D&D Species/Races (no duplicates to ensure distinct races)
-export const SPECIES = [
-  'Human', 'Elf', 'Dwarf', 'Halfling', 'Dragonborn',
-  'Tiefling', 'Gnome', 'Half-Elf', 'Half-Orc', 'Aasimar',
-  'Warforged', 'Tabaxi', 'Aarakocra', 'Genasi',
+// Simple character names pool (no D&D species)
+export const CHARACTER_NAMES = [
+  'Alex', 'Jordan', 'Sam', 'Casey', 'Morgan',
+  'Riley', 'Quinn', 'Avery', 'Blake', 'Cameron',
+  'Dakota', 'Emery', 'Finley', 'Harper', 'Hayden',
 ];
 

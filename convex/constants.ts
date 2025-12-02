@@ -37,8 +37,7 @@ export const INVITE_TIMEOUT = 60000;
 export const MAX_CONCURRENT_LLM_CALLS = 5;
 
 // Leave a conversation after participating too long.
-export const MAX_CONVERSATION_DURATION = 10 * 60_000; // more time locally
-// export const MAX_CONVERSATION_DURATION = 2 * 60_000;
+export const MAX_CONVERSATION_DURATION = 90_000; // 90 seconds for shorter conversations
 
 // Leave a conversation if it has more than 8 messages;
 export const MAX_CONVERSATION_MESSAGES = 8;

@@ -67,3 +67,47 @@ export const writeMessage = mutation({
     });
   },
 });
+
+// Query to get most recent message for a player from active conversations
+export const getMostRecentMessage = query({
+  args: {
+    worldId: v.id('worlds'),
+    playerId: playerId,
+  },
+  handler: async (ctx, args) => {
+    // Get all messages by this player from conversations in this world
+    // We need to query by conversationId index and filter
+    const allMessages: any[] = [];
+    
+    // Get all conversations for this world (we'll need to query messages by worldId)
+    // Since we don't have a direct worldId index on messages, we'll query all and filter
+    // This is not ideal but works for now
+    const messages = await ctx.db
+      .query('messages')
+      .filter((q) => q.eq(q.field('worldId'), args.worldId))
+      .collect();
+    
+    // Filter by author and get most recent
+    const playerMessages = messages
+      .filter((m) => m.author === args.playerId)
+      .sort((a, b) => b._creationTime - a._creationTime);
+    
+    if (playerMessages.length === 0) {
+      return null;
+    }
+    
+    const message = playerMessages[0];
+    
+    // Get player name
+    const playerDescription = await ctx.db
+      .query('playerDescriptions')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId).eq('playerId', args.playerId))
+      .first();
+    
+    return {
+      text: message.text,
+      timestamp: message._creationTime,
+      authorName: playerDescription?.name || 'Unknown',
+    };
+  },
+});

@@ -10,6 +10,8 @@ import { useHistoricalValue } from '../hooks/useHistoricalValue.ts';
 import { PlayerDescription } from '../../convex/aiTown/playerDescription.ts';
 import { WorldMap } from '../../convex/aiTown/worldMap.ts';
 import { ServerGame } from '../hooks/serverGame.ts';
+import { useQuery } from 'convex/react';
+import { api } from '../../convex/_generated/api';
 
 export type SelectElement = (element?: { kind: 'player'; id: GameId<'players'> }) => void;
 
@@ -21,19 +23,26 @@ export const Player = ({
   player,
   onClick,
   historicalTime,
+  worldId,
 }: {
   game: ServerGame;
   isViewer: boolean;
   player: ServerPlayer;
-
   onClick: SelectElement;
   historicalTime?: number;
+  worldId?: Id<'worlds'>;
 }) => {
   const playerCharacter = game.playerDescriptions.get(player.id)?.character;
   if (!playerCharacter) {
     throw new Error(`Player ${player.id} has no character`);
   }
   const character = characters.find((c) => c.name === playerCharacter);
+  
+  // Get most recent message for this player
+  const recentMessage = useQuery(
+    api.messages.getMostRecentMessage,
+    worldId ? { worldId, playerId: player.id } : 'skip'
+  );
 
   const locationBuffer = game.world.historicalLocations?.get(player.id);
   const historicalLocation = useHistoricalValue<Location>(
@@ -82,6 +91,7 @@ export const Player = ({
         textureUrl={character.textureUrl}
         spritesheetData={character.spritesheetData}
         speed={character.speed}
+        recentMessage={recentMessage || null}
         onClick={() => {
           onClick({ kind: 'player', id: player.id });
         }}
