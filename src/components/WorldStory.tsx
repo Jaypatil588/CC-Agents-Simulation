@@ -3,6 +3,7 @@ import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
 import { useEffect, useRef, useState } from 'react';
 import ReactModal from 'react-modal';
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 export function WorldStory({
   worldId,
@@ -21,6 +22,14 @@ export function WorldStory({
   const [hasShownModal, setHasShownModal] = useState(false);
   const [plotInput, setPlotInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // TTS state and refs
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+  const processedEntryIds = useRef<Set<string>>(new Set());
+  const elevenlabs = useRef<ElevenLabsClient | null>(null);
+  const audioQueue = useRef<ArrayBuffer[]>([]);
+  const isPlaying = useRef(false);
+  const currentAudio = useRef<HTMLAudioElement | null>(null);
   
   // Show modal when story is complete (only once)
   useEffect(() => {
@@ -50,6 +59,132 @@ export function WorldStory({
       setIsSubmitting(false);
     }
   };
+
+  // Initialize ElevenLabs client
+  useEffect(() => {
+    const apiKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
+    if (apiKey) {
+      elevenlabs.current = new ElevenLabsClient({
+        apiKey: apiKey,
+      });
+    } else {
+      console.warn('VITE_ELEVENLABS_API_KEY not found. TTS will be disabled.');
+    }
+  }, []);
+
+  // Audio playback function
+  const playAudio = async (audioBuffer: ArrayBuffer): Promise<void> => {
+    return new Promise((resolve) => {
+      if (isPlaying.current) {
+        // Queue audio if something is already playing
+        audioQueue.current.push(audioBuffer);
+        resolve();
+        return;
+      }
+
+      isPlaying.current = true;
+      const audio = new Audio();
+      currentAudio.current = audio;
+      const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+      const url = URL.createObjectURL(blob);
+
+      audio.src = url;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        isPlaying.current = false;
+        currentAudio.current = null;
+        
+        // Play next in queue
+        if (audioQueue.current.length > 0) {
+          const next = audioQueue.current.shift()!;
+          playAudio(next).then(resolve);
+        } else {
+          resolve();
+        }
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        isPlaying.current = false;
+        currentAudio.current = null;
+        resolve();
+      };
+      audio.play().catch((error) => {
+        console.error('Error playing audio:', error);
+        URL.revokeObjectURL(url);
+        isPlaying.current = false;
+        currentAudio.current = null;
+        resolve();
+      });
+    });
+  };
+
+  // Process new story entries for TTS
+  useEffect(() => {
+    if (!storyEntries || !elevenlabs.current || !ttsEnabled) return;
+
+    const newEntries = storyEntries.filter(
+      entry => !processedEntryIds.current.has(entry._id)
+    );
+
+    if (newEntries.length === 0) return;
+
+    // Mark entries as processed
+    newEntries.forEach(entry => processedEntryIds.current.add(entry._id));
+
+    // Generate audio for new entries
+    const processEntries = async () => {
+      for (const entry of newEntries) {
+        if (!entry.narrative || !ttsEnabled) continue;
+
+        try {
+          const audioStream = await elevenlabs.current!.textToSpeech.convert(
+            "6sFKzaJr574YWVu4UuJF",
+            {
+              text: entry.narrative,
+              modelId: "eleven_multilingual_v2",
+              outputFormat: "mp3_44100_128",
+            }
+          );
+
+          // Convert stream to ArrayBuffer
+          const chunks: Uint8Array[] = [];
+          const reader = audioStream.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              chunks.push(value);
+            }
+          }
+          const audioBuffer = new Uint8Array(
+            chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+          );
+          let offset = 0;
+          for (const chunk of chunks) {
+            audioBuffer.set(chunk, offset);
+            offset += chunk.length;
+          }
+
+          // Play audio
+          await playAudio(audioBuffer.buffer);
+        } catch (error) {
+          console.error('TTS error for entry:', entry._id, error);
+        }
+      }
+    };
+
+    processEntries();
+  }, [storyEntries, ttsEnabled]);
+
+  // Stop audio when TTS is disabled
+  useEffect(() => {
+    if (!ttsEnabled && currentAudio.current) {
+      currentAudio.current.pause();
+      currentAudio.current = null;
+      isPlaying.current = false;
+      audioQueue.current = [];
+    }
+  }, [ttsEnabled]);
 
   // Auto-scroll the story section to the bottom when new entries arrive
   useEffect(() => {
@@ -169,6 +304,21 @@ export function WorldStory({
         {/* Hover tooltip */}
         <div className="absolute top-2 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity z-10 bg-clay-700 px-3 py-1 rounded text-xs text-clay-200 font-display pointer-events-none whitespace-nowrap">
           ⚔️ LIVE ADVENTURE
+        </div>
+        
+        {/* TTS Toggle Button */}
+        <div className="absolute top-2 right-2 z-10">
+          <button
+            onClick={() => setTtsEnabled(!ttsEnabled)}
+            className={`px-3 py-1 rounded text-xs font-bold uppercase tracking-wide transition-all border-2 ${
+              ttsEnabled
+                ? 'bg-clay-700 hover:bg-clay-600 text-clay-200 border-clay-900'
+                : 'bg-brown-800 hover:bg-brown-700 text-brown-400 border-brown-900'
+            }`}
+            title={ttsEnabled ? 'Disable Text-to-Speech' : 'Enable Text-to-Speech'}
+          >
+            {ttsEnabled ? '🔊 TTS ON' : '🔇 TTS OFF'}
+          </button>
         </div>
         
         <div className="desc flex-1 overflow-hidden flex flex-col min-h-0">

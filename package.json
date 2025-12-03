@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@clerk/clerk-react": "^4.27.0",
+    "@elevenlabs/elevenlabs-js": "^2.26.0",
     "@pixi/react": "^7.1.0",
     "@pixi/sound": "^5.2.0",
     "@tailwindcss/forms": "^0.5.3",

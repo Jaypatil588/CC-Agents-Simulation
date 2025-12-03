@@ -198,6 +198,7 @@ cat > .env.local << EOF
 CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY"
 CONVEX_SELF_HOSTED_URL="http://127.0.0.1:3210"
 VITE_CONVEX_URL="http://127.0.0.1:3210"
+VITE_ELEVENLABS_API_KEY=sk_c34fb5c40e9d15ccf45b696cbe79d6f04f7d7d6b96f7fe37
 EOF
 print_status ".env.local created"
 echo ""
