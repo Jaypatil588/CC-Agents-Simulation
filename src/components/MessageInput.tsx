@@ -55,7 +55,7 @@ export function MessageInput({
     if (!inputRef.current) {
       return;
     }
-    const text = inputRef.current.innerText;
+    var text = inputRef.current.innerText;
     inputRef.current.innerText = '';
     if (!text) {
       return;
@@ -64,6 +64,7 @@ export function MessageInput({
     if (currentlyTyping && currentlyTyping.playerId === humanPlayer.id) {
       messageUuid = currentlyTyping.messageUuid;
     }
+    text = " (You are to give the following dialouge the highest priority in the world story, and immediately integrate this dialouge into the world story. The following dialouge is from the human player: " + text + ")";
     messageUuid = messageUuid || crypto.randomUUID();
     await writeMessage({
       worldId,
