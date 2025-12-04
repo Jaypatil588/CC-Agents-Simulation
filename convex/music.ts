@@ -26,20 +26,58 @@ export const insertMusic = internalMutation({
 });
 
 export const getBackgroundMusic = query({
-  handler: async (ctx) => {
+  args: {
+    worldId: v.optional(v.id('worlds')),
+  },
+  handler: async (ctx, args) => {
+    // If worldId is provided, check the story progress and return stage-based music
+    if (args.worldId) {
+      const plot = await ctx.db
+        .query('worldPlot')
+        .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+        .first();
+      
+      if (plot && plot.storyProgress) {
+        const stage = plot.storyProgress;
+        let musicUrl: string;
+        
+        // Return stage-specific music files
+        switch (stage) {
+          case 'beginning':
+            musicUrl = '/ai-town/assets/background.mp3';
+            break;
+          case 'rising':
+            musicUrl = '/ai-town/assets/music/rising.mp3';
+            break;
+          case 'climax':
+            musicUrl = '/ai-town/assets/music/climax.mp3';
+            break;
+          case 'ongoing':
+            musicUrl = '/ai-town/assets/music/ongoing.mp3';
+            break;
+          default:
+            // Fallback to default if stage is unknown
+            musicUrl = '/ai-town/assets/background.mp3';
+        }
+        
+        return { musicUrl, stage };
+      }
+    }
+    
+    // Fallback to stored music or default
     const music = await ctx.db
       .query('music')
       .filter((entry) => entry.eq(entry.field('type'), 'background'))
       .order('desc')
       .first();
     if (!music) {
-      return '/ai-town/assets/background.mp3';
+      return { musicUrl: '/ai-town/assets/background.mp3', stage: 'beginning' };
     }
     const url = await ctx.storage.getUrl(music.storageId);
     if (!url) {
       throw new Error(`Invalid storage ID: ${music.storageId}`);
     }
-    return url;
+    return { musicUrl: url, stage: null };
   },
 });
 

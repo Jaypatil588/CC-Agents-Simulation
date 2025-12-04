@@ -1279,7 +1279,7 @@ export const generateNarrative = internalAction({
 
 Passage ${nextPassageNumber}/${MAX_PASSAGES}. ${phaseInstructions}
 
-WHAT ALREADY HAPPENED:
+WHAT ALREADY HAPPENED (CONTEXT ONLY - DO NOT REITERATE):
 ${previousParagraphs}
 
 ${mutationContext}
@@ -1290,18 +1290,21 @@ Plot Summary: ${plot.currentSummary}
 CHARACTER DIALOGUES (Active Voice - interpret what they're saying):
 ${conversationText}
 
-CRITICAL REQUIREMENTS:
-- INTERPRET the active voice dialogues above - these are what characters are actually saying/doing
+CRITICAL REQUIREMENTS - FOLLOW STRICTLY:
+- The "WHAT ALREADY HAPPENED" section above is PROVIDED FOR CONTEXT ONLY - DO NOT REITERATE, SUMMARIZE, OR REPEAT any of it in your response
+- Your response must contain ONLY NEW developments that have NOT been mentioned before
+- INTERPRET the active voice dialogues above - these are what characters are actually saying/doing RIGHT NOW
 - Characters are INDEPENDENT characters whose conversations directly shape the story theme
 - The theme has evolved through their interactions - show how their dialogues continue this evolution
 - Transform their dialogues into narrative prose that advances the story and reflects theme evolution
-- Write something NEW that ADVANCES the plot meaningfully based on what the characters are saying
-- Do NOT repeat similar themes, locations, or situations from what already happened
-- Introduce a NEW development, twist, discovery, or progression based on the dialogues
-- Each paragraph must move the story forward - avoid repetitive descriptions
-- If previous paragraphs mentioned a location/artifact/conflict, advance it or introduce something NEW
+- Write something COMPLETELY NEW that ADVANCES the plot meaningfully based on what the characters are saying
+- STRICTLY FORBIDDEN: Do NOT repeat, reiterate, summarize, or reference any events, themes, locations, or situations from "WHAT ALREADY HAPPENED"
+- STRICTLY FORBIDDEN: Do NOT use phrases like "as mentioned before", "continuing from", "building on", or any reference to previous plot
+- Introduce ONLY NEW developments, twists, discoveries, or progressions based on the CURRENT dialogues
+- Each sentence must move the story forward with FRESH content - avoid any repetition whatsoever
+- If previous paragraphs mentioned a location/artifact/conflict, advance it with NEW information or introduce something COMPLETELY NEW
 
-Write exactly one dramatic sentence representing a NEW development based on interpreting the character dialogues and theme evolution:`;
+Write exactly one dramatic sentence representing ONLY NEW developments based on interpreting the character dialogues and theme evolution. Do NOT include any reference to previous plot:`;
     
     try {
       const { content }: any = await chatCompletion({
@@ -1309,8 +1312,8 @@ Write exactly one dramatic sentence representing a NEW development based on inte
           {
             role: 'system',
             content: isFinalPassage 
-              ? 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. Final passage - conclude the story in a single dramatic sentence resolving the conflict.'
-              : 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose.\n\nCRITICAL: The character dialogues you see are in ACTIVE VOICE (what characters are actually saying). Your job is to INTERPRET these active voice dialogues and transform them into narrative prose that advances the story. Write exactly one dramatic sentence that represents a NEW development based on interpreting what the characters are saying. Do NOT repeat themes, locations, or situations from previous paragraphs. Each sentence must advance the plot meaningfully.',
+              ? 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. Final passage - conclude the story in a single dramatic sentence resolving the conflict. DO NOT reiterate previous plot - only include the conclusion.'
+              : 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose.\n\nCRITICAL RULES - FOLLOW STRICTLY:\n1. The character dialogues you see are in ACTIVE VOICE (what characters are actually saying RIGHT NOW)\n2. Your job is to INTERPRET these active voice dialogues and transform them into narrative prose that advances the story\n3. Write exactly one dramatic sentence that represents ONLY NEW developments based on interpreting what the characters are saying\n4. STRICTLY FORBIDDEN: Do NOT repeat, reiterate, summarize, or reference any previous plot, themes, locations, or situations\n5. STRICTLY FORBIDDEN: Do NOT use phrases that reference previous events like "as mentioned", "continuing", "building on", etc.\n6. Your response must contain ONLY brand new developments that have never been mentioned before\n7. Each sentence must advance the plot meaningfully with completely fresh content',
           },
           {
             role: 'user',
@@ -1484,13 +1487,13 @@ export const generatePlotSummary = internalAction({
         messages: [
           {
             role: 'system',
-            content: 'You are summarizing fictional story events. IMPORTANT: You have a MAXIMUM of 100 TOKENS. Write a concise summary that reflects what is currently happening. Keep it brief - you MUST stay within 100 tokens total. Write 1-3 sentences maximum. No prefix text. Focus on the most recent developments.',
+            content: 'You are summarizing fictional story events. IMPORTANT: You have a MAXIMUM of 100 TOKENS. Write a concise summary that reflects ONLY what is currently happening (the most recent developments). Do NOT reiterate previous plot or old events. Keep it brief - you MUST stay within 100 tokens total. Write 1-3 sentences maximum. No prefix text. Focus STRICTLY on the most recent developments only.',
           },
           {
             role: 'user',
             content: `Plot: ${plot.initialPlot}
 Recent Events: ${storyText}
-Write a concise summary reflecting what's currently going on (MAXIMUM 100 TOKENS):`,
+Write a concise summary reflecting ONLY what's currently going on (the most recent developments). Do NOT reiterate previous plot. (MAXIMUM 100 TOKENS):`,
           },
         ],
         temperature: 0.7,
