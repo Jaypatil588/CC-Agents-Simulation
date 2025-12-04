@@ -36,7 +36,7 @@ export const generateAgentsFromStory = internalAction({
           },
           {
             role: 'user',
-            content: `Given this complete story draft, create 5 independent characters who act as plot devices:
+            content: `Given this complete story draft, create 3 independent characters who act as plot devices (there will also be 1 human player, making 4 total characters):
 
 Story Draft: ${storyDraft.draftText}
 
@@ -63,8 +63,8 @@ Format as JSON array: [{"name": "...", "personality": "...", "motivation": "..."
       
       const agents = JSON.parse(jsonMatch[0]);
       
-      if (!Array.isArray(agents) || agents.length !== 5) {
-        throw new Error(`Expected 5 agents, got ${agents.length}`);
+      if (!Array.isArray(agents) || agents.length !== 3) {
+        throw new Error(`Expected 3 agents, got ${agents.length}`);
       }
       
       // Save each agent
@@ -106,8 +106,8 @@ export const generateCharacterDescriptions = internalAction({
     worldId: v.id('worlds'),
   },
   handler: async (ctx, args) => {
-    // Generate 5 characters, each with 3-5 random traits
-    const NUM_CHARACTERS = 5;
+    // Generate 3 characters, each with 3-5 random traits (3 AI agents + 1 player = 4 total)
+    const NUM_CHARACTERS = 3;
     const TRAITS_PER_CHARACTER = 3; // Reduced from 10 for simplicity
     
     // Shuffle names and traits
