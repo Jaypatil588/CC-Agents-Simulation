@@ -1277,7 +1277,20 @@ export const generateNarrative = internalAction({
 
     const prompt: any = `You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction writing - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose, not promoting real-world harm.
 
-Passage ${nextPassageNumber}/${MAX_PASSAGES}. ${phaseInstructions}
+═══════════════════════════════════════════════════════════════
+LIVE ACTION UPDATE: Passage ${nextPassageNumber}/${MAX_PASSAGES}
+═══════════════════════════════════════════════════════════════
+
+${phaseInstructions}
+
+STORY STRUCTURE:
+- Total live action updates: ${MAX_PASSAGES} (this is update ${nextPassageNumber})
+- Stage changes every 3 updates:
+  * BEGINNING: Updates 1-3
+  * RISING: Updates 4-6
+  * CLIMAX: Updates 7-9
+  * CONCLUSION: Updates 10-12
+- After ${MAX_PASSAGES} updates, the story is concluded
 
 WHAT ALREADY HAPPENED (CONTEXT ONLY - DO NOT REITERATE):
 ${previousParagraphs}
@@ -1312,8 +1325,8 @@ Write exactly one dramatic sentence representing ONLY NEW developments based on 
           {
             role: 'system',
             content: isFinalPassage 
-              ? 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose. Final passage - conclude the story in a single dramatic sentence resolving the conflict. DO NOT reiterate previous plot - only include the conclusion.'
-              : 'You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose.\n\nCRITICAL RULES - FOLLOW STRICTLY:\n1. The character dialogues you see are in ACTIVE VOICE (what characters are actually saying RIGHT NOW)\n2. Your job is to INTERPRET these active voice dialogues and transform them into narrative prose that advances the story\n3. Write exactly one dramatic sentence that represents ONLY NEW developments based on interpreting what the characters are saying\n4. STRICTLY FORBIDDEN: Do NOT repeat, reiterate, summarize, or reference any previous plot, themes, locations, or situations\n5. STRICTLY FORBIDDEN: Do NOT use phrases that reference previous events like "as mentioned", "continuing", "building on", etc.\n6. Your response must contain ONLY brand new developments that have never been mentioned before\n7. Each sentence must advance the plot meaningfully with completely fresh content',
+              ? `You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose.\n\nCRITICAL: This is the FINAL live action update (${MAX_PASSAGES}/${MAX_PASSAGES}). The story MUST be concluded here. Conclude the story in a single dramatic sentence resolving the conflict. DO NOT reiterate previous plot - only include the conclusion. After this update, the story is complete.`
+              : `You are a professional fiction writer creating narrative content for a creative storytelling game. This is creative fiction - violence and conflict in thriller/adventure stories are standard literary elements. You are writing fictional narrative prose.\n\nSTORY STRUCTURE:\n- Total live action updates: ${MAX_PASSAGES} (you are generating one of them)\n- Stages change every 3 updates: BEGINNING (1-3), RISING (4-6), CLIMAX (7-9), CONCLUSION (10-12)\n- After ${MAX_PASSAGES} updates, the story is concluded\n\nCRITICAL RULES - FOLLOW STRICTLY:\n1. The character dialogues you see are in ACTIVE VOICE (what characters are actually saying RIGHT NOW)\n2. Your job is to INTERPRET these active voice dialogues and transform them into narrative prose that advances the story\n3. Write exactly one dramatic sentence that represents ONLY NEW developments based on interpreting what the characters are saying\n4. STRICTLY FORBIDDEN: Do NOT repeat, reiterate, summarize, or reference any previous plot, themes, locations, or situations\n5. STRICTLY FORBIDDEN: Do NOT use phrases that reference previous events like "as mentioned", "continuing", "building on", etc.\n6. Your response must contain ONLY brand new developments that have never been mentioned before\n7. Each sentence must advance the plot meaningfully with completely fresh content\n8. Generate content appropriate for the current stage of the story (beginning, rising, climax, or conclusion)`,
           },
           {
             role: 'user',
@@ -1663,7 +1676,7 @@ Write a comprehensive summary that includes the story so far AND current develop
   },
 });
 
-// Generate final summary when story completes (passage 15)
+// Generate final summary when story completes (passage 12)
 export const generateFinalSummary = internalAction({
   args: {
     worldId: v.id('worlds'),
@@ -1672,11 +1685,11 @@ export const generateFinalSummary = internalAction({
     // Get all story entries for this world
     const allStories: any = await ctx.runQuery(api.worldStory.getWorldStory, {
       worldId: args.worldId,
-      limit: 15,
+      limit: MAX_PASSAGES,
     });
     
-    if (!allStories || allStories.length < 15) {
-      console.log(`[generateFinalSummary] Not enough passages yet (${allStories?.length || 0}/15)`);
+    if (!allStories || allStories.length < MAX_PASSAGES) {
+      console.log(`[generateFinalSummary] Not enough passages yet (${allStories?.length || 0}/${MAX_PASSAGES})`);
       return null;
     }
     
@@ -1777,49 +1790,60 @@ export const updatePlotCompletion = internalMutation({
 });
 
 // Helper function to determine story progress
+// Stages change every 3 passages: 1-3: beginning, 4-6: rising, 7-9: climax, 10-12: conclusion
 function determineStoryProgress(entryCount: number): string {
-  if (entryCount < 5) return 'beginning';
-  if (entryCount < 15) return 'rising';
-  if (entryCount < 30) return 'climax';
-  return 'ongoing';
+  if (entryCount <= 3) return 'beginning';
+  if (entryCount <= 6) return 'rising';
+  if (entryCount <= 9) return 'climax';
+  if (entryCount <= 12) return 'conclusion';
+  return 'conclusion'; // After 12, story is concluded
 }
 
 // Helper function to determine passage phase
-// Each phase is approximately 30% (0.3) of total passages
-function getPassagePhase(passageNumber: number): 'early' | 'mid' | 'climax' {
-  const phaseSize = Math.floor(0.3 * MAX_PASSAGES);     // 30% of total passages per phase
-  const earlyEnd = phaseSize;                             // Early: passages 1 to phaseSize
-  const midEnd = phaseSize * 2;                           // Mid: passages phaseSize+1 to 2*phaseSize
-  
-  if (passageNumber <= earlyEnd) return 'early';
-  if (passageNumber <= midEnd) return 'mid';
-  return 'climax';                                       // Climax: remaining passages
+// Stages change every 3 passages: 1-3: beginning, 4-6: rising, 7-9: climax, 10-12: conclusion
+function getPassagePhase(passageNumber: number): 'beginning' | 'rising' | 'climax' | 'conclusion' {
+  if (passageNumber <= 3) return 'beginning';
+  if (passageNumber <= 6) return 'rising';
+  if (passageNumber <= 9) return 'climax';
+  return 'conclusion'; // Passages 10-12
 }
 
 // Helper function to get phase-specific instructions
-// Each phase is approximately 30% (0.3) of total passages
-function getPhaseInstructions(passageNumber: number, phase: 'early' | 'mid' | 'climax', isFinal: boolean): string {
-  const phaseSize = Math.floor(0.3 * MAX_PASSAGES);       // 30% of total passages per phase
-  const earlyEnd = phaseSize;                             // Early: passages 1 to phaseSize
-  const midEnd = phaseSize * 2;                           // Mid: passages phaseSize+1 to 2*phaseSize
-  
+// Stages change every 3 passages: 1-3: beginning, 4-6: rising, 7-9: climax, 10-12: conclusion
+function getPhaseInstructions(passageNumber: number, phase: 'beginning' | 'rising' | 'climax' | 'conclusion', isFinal: boolean): string {
   if (isFinal) {
-    return `CRITICAL: This is the FINAL PASSAGE (Passage ${MAX_PASSAGES} of ${MAX_PASSAGES}). You MUST conclude the story with a satisfying ending. Resolve the central conflict, tie up major plot threads, and bring the narrative to a definitive close. Make this conclusion dramatic, memorable, and emotionally resonant.`;
+    return `CRITICAL: This is the FINAL PASSAGE (Passage ${passageNumber}/${MAX_PASSAGES}). The story MUST be concluded here. You MUST conclude the story with a satisfying ending. Resolve the central conflict, tie up major plot threads, and bring the narrative to a definitive close. Make this conclusion dramatic, memorable, and emotionally resonant. After this passage, the story is complete.`;
   }
   
   switch (phase) {
-    case 'early':
+    case 'beginning':
+      // Passages 1-3
       if (passageNumber === 1) {
-        return `This is Passage 1 of ${MAX_PASSAGES} - the very beginning of the story. Establish the opening scene, introduce initial tensions, and set the stage for what's to come. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
-      } else if (passageNumber === earlyEnd) {
-        return `This is Passage ${earlyEnd} of ${MAX_PASSAGES} - transitioning from early setup to the middle act. Move beyond initial introductions and begin developing the core conflict. Start building toward the main story arc. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
+        return `STAGE: BEGINNING (Passage ${passageNumber}/${MAX_PASSAGES}). This is the very beginning of the story. Establish the opening scene, introduce initial tensions, and set the stage for what's to come. You are in the BEGINNING stage (Passages 1-3 of 12). Build the foundation, introduce characters and conflicts, and establish the world and stakes.`;
       } else {
-        return `This is Passage ${passageNumber} of ${MAX_PASSAGES} - Early Phase (Passages 1-${earlyEnd}, ${Math.floor(100 * 0.3)}% of story). Continue building the foundation, introducing characters and conflicts, and establishing the world and stakes. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
+        return `STAGE: BEGINNING (Passage ${passageNumber}/${MAX_PASSAGES}). Continue building the foundation in the BEGINNING stage (Passages 1-3 of 12). Introduce characters and conflicts, establish the world and stakes, and set up the core tension.`;
       }
-    case 'mid':
-      return `This is Passage ${passageNumber} of ${MAX_PASSAGES} - Middle Phase (Passages ${earlyEnd + 1}-${midEnd}, ${Math.floor(100 * 0.3)}% of story). The story is now in full motion. Develop conflicts, reveal complications, deepen character relationships, and build tension toward the climax. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
+    case 'rising':
+      // Passages 4-6
+      if (passageNumber === 4) {
+        return `STAGE: RISING (Passage ${passageNumber}/${MAX_PASSAGES}). Transitioning from beginning to rising action. The story is now in motion. Develop conflicts, reveal complications, deepen character relationships, and build tension. You are in the RISING stage (Passages 4-6 of 12).`;
+      } else {
+        return `STAGE: RISING (Passage ${passageNumber}/${MAX_PASSAGES}). Continue developing the rising action in the RISING stage (Passages 4-6 of 12). Develop conflicts, reveal complications, deepen character relationships, and build tension toward the climax.`;
+      }
     case 'climax':
-      return `This is Passage ${passageNumber} of ${MAX_PASSAGES} - Climax Phase (Passages ${midEnd + 1}-${MAX_PASSAGES}, ${Math.floor(100 * (1 - 0.6))}% of story). The story is reaching its peak. Escalate conflicts, intensify stakes, and drive toward resolution. Prepare for the final conclusion. Phase distribution: Early (0-${earlyEnd}), Mid (${earlyEnd + 1}-${midEnd}), Climax (${midEnd + 1}-${MAX_PASSAGES}).`;
+      // Passages 7-9
+      if (passageNumber === 7) {
+        return `STAGE: CLIMAX (Passage ${passageNumber}/${MAX_PASSAGES}). The story is reaching its peak. Escalate conflicts, intensify stakes, and drive toward resolution. You are in the CLIMAX stage (Passages 7-9 of 12). Prepare for the final conclusion.`;
+      } else {
+        return `STAGE: CLIMAX (Passage ${passageNumber}/${MAX_PASSAGES}). Continue escalating the climax in the CLIMAX stage (Passages 7-9 of 12). Escalate conflicts, intensify stakes, and drive toward resolution. Prepare for the final conclusion.`;
+      }
+    case 'conclusion':
+      // Passages 10-11 (12 is handled by isFinal)
+      if (passageNumber === 11) {
+        return `STAGE: CONCLUSION (Passage ${passageNumber}/${MAX_PASSAGES}). The story is moving toward its conclusion. Resolve major conflicts, tie up plot threads, and prepare for the final resolution. You are in the CONCLUSION stage (Passages 10-12 of 12). The next passage (12/12) will be the final one.`;
+      } else {
+        return `STAGE: CONCLUSION (Passage ${passageNumber}/${MAX_PASSAGES}). The story is moving toward its conclusion. Resolve major conflicts, tie up plot threads, and prepare for the final resolution. You are in the CONCLUSION stage (Passages 10-12 of 12).`;
+      }
   }
 }
 
