@@ -33,8 +33,8 @@ const init = mutation({
         worldId: worldStatus.worldId,
       });
       
-      // Then create 5 agents (wait a bit for generation to complete)
-      const NUM_AGENTS = 5;
+      // Then create 3 agents (wait a bit for generation to complete) - 3 AI agents + 1 player = 4 total
+      const NUM_AGENTS = 3;
       await ctx.scheduler.runAfter(1000, internal.init.createAgentsAfterGeneration, {
         worldId: worldStatus.worldId,
         numAgents: args.numAgents !== undefined ? args.numAgents : NUM_AGENTS,
